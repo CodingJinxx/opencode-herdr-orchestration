@@ -81,6 +81,7 @@ export function mergeAgent(defaults, override) {
 }
 
 export function createAgents(options = {}) {
+  const shepherdModel = options.shepherdModel;
   const workerModel = options.workerModel ?? "litellm/glm-5.3-flash";
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
   const shepherdBuildPermissions = options.shepherdBuildPermissions ?? {};
@@ -89,6 +90,7 @@ export function createAgents(options = {}) {
   return {
     "shepherd-plan": {
       mode: "primary",
+      ...(shepherdModel ? { model: shepherdModel } : {}),
       description: "Researches and presents implementation-ready plans through sheep-plan workers without implementing them.",
       prompt: SHEPHERD_PLAN_PROMPT,
       permission: {
@@ -135,6 +137,7 @@ export function createAgents(options = {}) {
 
     "shepherd-build": {
       mode: "primary",
+      ...(shepherdModel ? { model: shepherdModel } : {}),
       description: "Executes approved plans through planning, implementation, and independent review workers.",
       prompt: shepherdBuildPrompt,
       permission: {

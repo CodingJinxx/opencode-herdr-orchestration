@@ -6,7 +6,15 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { parse } from "jsonc-parser";
 
-import { backupFile, isOrchestrationPlugin, packageEntry, restoreBackup, updatePluginConfig } from "../src/installer.js";
+import {
+  backupFile,
+  isOrchestrationPlugin,
+  orchestrationOptions,
+  packageEntry,
+  restoreBackup,
+  updateAgentModels,
+  updatePluginConfig,
+} from "../src/installer.js";
 
 const cli = resolve("bin/orchestration.js");
 
@@ -80,6 +88,54 @@ test("adds, removes, and deduplicates only orchestration registrations", () => {
   const deduplicated = updatePluginConfig(duplicate, entry);
   assert.deepEqual(parse(deduplicated).plugin, ["other", entry]);
   assert.deepEqual(parse(updatePluginConfig(deduplicated, entry, true)).plugin, ["other"]);
+});
+
+test("configures agent models while preserving plugin options and comments", () => {
+  const source = `{
+  // Keep this comment.
+  "plugin": [["opencode-herdr-orchestration", {
+    "private": true, // Keep this option comment.
+    "workerModel": "old/worker",
+  }]],
+}
+`;
+  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const updated = updateAgentModels(source, entry, {
+    shepherdModel: "provider/shepherd",
+    workerModel: "provider/worker",
+    reviewerModel: "provider/reviewer",
+  });
+  assert.match(updated, /Keep this comment/);
+  assert.match(updated, /Keep this option comment/);
+  assert.deepEqual(orchestrationOptions(updated), {
+    private: true,
+    workerModel: "provider/worker",
+    shepherdModel: "provider/shepherd",
+    reviewerModel: "provider/reviewer",
+  });
+});
+
+test("empty model choices restore package defaults", () => {
+  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const source = JSON.stringify({
+    plugin: [[entry, { workerModel: "custom/worker", reviewerModel: "custom/reviewer", keep: true }]],
+  });
+  const updated = updateAgentModels(source, entry, { workerModel: "", reviewerModel: "" });
+  assert.deepEqual(orchestrationOptions(updated), { keep: true });
+});
+
+test("promotes a first-time plugin registration to model options", () => {
+  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const updated = updateAgentModels("{}", entry, {
+    shepherdModel: "provider/shepherd",
+    workerModel: "provider/worker",
+    reviewerModel: "provider/reviewer",
+  });
+  assert.deepEqual(parse(updated).plugin, [[entry, {
+    shepherdModel: "provider/shepherd",
+    workerModel: "provider/worker",
+    reviewerModel: "provider/reviewer",
+  }]]);
 });
 
 test("creates portable file URLs and recognizes package registrations", () => {

@@ -65,6 +65,38 @@ export function updatePluginConfig(text, entry, remove = false) {
   return source;
 }
 
+export function orchestrationOptions(text) {
+  const config = parse(text || "{}", [], { allowTrailingComma: true, disallowComments: false });
+  const entry = Array.isArray(config?.plugin)
+    ? config.plugin.find((candidate) => isOrchestrationPlugin(candidate))
+    : undefined;
+  return Array.isArray(entry) && entry[1] && typeof entry[1] === "object" ? entry[1] : {};
+}
+
+export function updateAgentModels(text, entry, models) {
+  const original = parse(text || "{}", [], { allowTrailingComma: true, disallowComments: false });
+  const matches = Array.isArray(original?.plugin)
+    ? original.plugin.map((candidate, index) => isOrchestrationPlugin(candidate) ? index : -1).filter((index) => index >= 0)
+    : [];
+  let updated = text || "{}";
+  const formattingOptions = { insertSpaces: true, tabSize: 2, eol: updated.includes("\r\n") ? "\r\n" : "\n" };
+  if (matches.length === 1 && Array.isArray(original.plugin[matches[0]])) {
+    updated = applyEdits(updated, modify(updated, ["plugin", matches[0], 0], entry, { formattingOptions }));
+  } else {
+    updated = updatePluginConfig(updated, entry);
+  }
+  const config = parse(updated, [], { allowTrailingComma: true, disallowComments: false });
+  const index = config.plugin.findIndex((candidate) => isOrchestrationPlugin(candidate));
+  if (!Array.isArray(config.plugin[index])) {
+    const options = Object.fromEntries(Object.entries(models).filter(([, value]) => value));
+    return applyEdits(updated, modify(updated, ["plugin", index], [entry, options], { formattingOptions }));
+  }
+  for (const [key, value] of Object.entries(models)) {
+    updated = applyEdits(updated, modify(updated, ["plugin", index, 1, key], value || undefined, { formattingOptions }));
+  }
+  return updated;
+}
+
 export function findConfigFile(configDir) {
   for (const name of ["opencode.jsonc", "opencode.json"]) {
     const candidate = join(configDir, name);
@@ -132,12 +164,14 @@ export function uninstallPackage(configDir) {
   return backups;
 }
 
-export function writePluginConfig(configDir, remove = false) {
+export function writePluginConfig(configDir, remove = false, models) {
   mkdirSync(configDir, { recursive: true });
   const file = findConfigFile(configDir);
   const existed = existsSync(file);
   const previous = existed ? readFileSync(file, "utf8") : '{\n  "$schema": "https://opencode.ai/config.json"\n}\n';
-  const next = updatePluginConfig(previous, packageEntry(configDir), remove);
+  const next = models && !remove
+    ? updateAgentModels(previous, packageEntry(configDir), models)
+    : updatePluginConfig(previous, packageEntry(configDir), remove);
   if (next === previous) return { file, backup: null, changed: false, existed };
   const backup = backupFile(file);
   writeFileSync(file, next, "utf8");
