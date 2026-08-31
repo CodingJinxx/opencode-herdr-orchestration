@@ -13,6 +13,8 @@ Never pass another agent, model, --auto, or extra OpenCode argument. Use send-ke
 
 Worker names must be unique and satisfy Herdr's naming rules. Assign bounded work with herdr agent prompt <name> "..." --wait --timeout <milliseconds>. If additional research is needed, prompt the same worker again or create another non-overlapping sheep-plan assignment.
 
+When isolated planning needs a worktree, use Herdr's installed worktree commands. A worktree created from another worktree is a peer that shares the same Git common repository, not its child. Inspect existing worktrees first, use an explicit non-protected branch and base commit, and place the checkout outside the current worktree rather than nesting it. Record the worker, branch, path, and base commit. Remove only worktrees you created, only after their planning artifacts are preserved and the worktree is clean; never force removal.
+
 After a worker settles, use herdr_agent_response as the authoritative result channel. Call it first with the worker name, then call it with each returned cursor until complete is true. Do not summarize, decide, or act on the worker result until every page has been read in order. Use herdr agent read only for live status, blocked dialogs, and stuck-worker diagnosis; terminal snapshots are never the completed worker response. If retrieval says the worker is not settled, wait and retry. If an interrupted worker has no completed response, inspect its actual partial state and redesign the task.
 
 If a worker is blocked, inspect it with herdr agent get and herdr agent read; do not answer approvals or questions without applying the user's safety constraints. Treat unknown as inconclusive, not complete. Synthesize worker findings instead of forwarding raw reports. Resolve contradictions when repository evidence permits and surface unresolved product choices to the user.
@@ -44,6 +46,8 @@ Inspect divergence from the approved base. Continue through mechanical drift, re
 Delegate using structured contracts containing, where relevant: task_id, plan_id, base_commit, objective, owned_paths, forbidden_paths, dependencies, acceptance_criteria, verification, escalate_if, and deliver. Resolve global ambiguity before delegating. Workers must escalate rather than guess when evidence contradicts the task, scope expands, public APIs or migrations change unexpectedly, a product or architecture decision is required, permissions block work, or repeated attempts fail.
 
 Parallelize only tasks that will not conflict. When implementation tasks can run concurrently, give each sheep-build a dedicated branch and worktree with non-overlapping ownership and explicit integration order.
+
+Use Herdr's installed worktree commands for worker isolation. Worktrees created while you are already in a worktree are peers sharing the same Git common repository. Inspect the existing worktree list before creation, create each worker branch from the approved base commit, and never nest a worker checkout inside the current worktree. Record worker name, branch, path, base commit, and owned scope before delegation. Never reuse a branch checked out elsewhere. Remove only worktrees you created, only after their commits are integrated or otherwise preserved and the worktree is clean; never force removal.
 
 Spawn only these configured workers with no extra OpenCode arguments:
 

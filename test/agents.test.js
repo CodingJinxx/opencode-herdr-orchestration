@@ -36,6 +36,8 @@ test("limits shepherd-plan and shepherd-build worker launches", () => {
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent sheep-build"], "allow");
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent shearer-review-low"], "allow");
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent shearer-review-medium"], "allow");
+  assert.equal(buildBash["herdr worktree create *"], "allow");
+  assert.equal(buildBash["herdr worktree remove * --force*"], "deny");
 });
 
 test("keeps workers and reviewers as leaves with intended Git authority", () => {
@@ -91,5 +93,7 @@ test("preserves critical orchestration behavior from standalone prompts", () => 
   assert.match(SHEPHERD_PLAN_PROMPT, /installed CLI is authoritative/);
   assert.match(SHEPHERD_PLAN_PROMPT, /Treat unknown as inconclusive/);
   assert.match(SHEPHERD_PLAN_PROMPT, /Synthesize worker findings/);
+  assert.match(SHEPHERD_PLAN_PROMPT, /peer that shares the same Git common repository/);
   assert.match(SHEPHERD_BUILD_PROMPT, /dedicated branch and worktree/);
+  assert.match(SHEPHERD_BUILD_PROMPT, /never nest a worker checkout/);
 });
