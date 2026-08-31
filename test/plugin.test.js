@@ -31,6 +31,22 @@ test("registers agents and injects per-session modes", async () => {
   assert.equal(unknownOutput.env.SHEPHERD_MODE, "none");
 });
 
+test("applies configured models by agent role", async () => {
+  const hooks = await plugin({}, {
+    shepherdModel: "custom/shepherd",
+    workerModel: "custom/worker",
+    reviewerModel: "custom/reviewer",
+  });
+  const config = {};
+  hooks.config(config);
+  assert.equal(config.agent["shepherd-plan"].model, "custom/shepherd");
+  assert.equal(config.agent["shepherd-build"].model, "custom/shepherd");
+  assert.equal(config.agent["sheep-plan"].model, "custom/worker");
+  assert.equal(config.agent["sheep-build"].model, "custom/worker");
+  assert.equal(config.agent["shearer-review-low"].model, "custom/reviewer");
+  assert.equal(config.agent["shearer-review-medium"].model, "custom/reviewer");
+});
+
 test("custom response tool returns structured output and metadata", async () => {
   const run = async (command) => {
     if (command === "herdr") {

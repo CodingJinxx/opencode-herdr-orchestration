@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import {
   configDirectory,
+  findConfigFile,
   installPackage,
   latestVersion,
   PACKAGE_NAME,
   packageVersion,
+  orchestrationOptions,
   restoreBackup,
   status as installationStatus,
   uninstallPackage,
@@ -23,6 +26,12 @@ const hooksPath = join(homedir(), ".config", "opencode-herdr-orchestration", "ho
 const sourceHook = join(packageRoot, "hooks", "pre-push");
 const installedHook = join(hooksPath, "pre-push");
 const [command, ...flags] = process.argv.slice(2);
+
+const MODEL_ROLES = [
+  ["shepherdModel", "Shepherd agents", "OpenCode active model"],
+  ["workerModel", "Sheep worker agents", "litellm/glm-5.3-flash"],
+  ["reviewerModel", "Shearer review agents", "litellm-responses/gpt-5.6-terra"],
+];
 
 function git(args, options = {}) {
   return execFileSync("git", args, { encoding: "utf8", windowsHide: true, ...options }).trim();
@@ -59,11 +68,41 @@ function uninstallHooks() {
   }
 }
 
-function installOrUpdate(useLatest) {
+function currentOptions(configDir) {
+  const file = findConfigFile(configDir);
+  return existsSync(file) ? orchestrationOptions(readFileSync(file, "utf8")) : {};
+}
+
+async function promptForModels(configDir) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Agent model configuration requires an interactive terminal.");
+  }
+  const existing = currentOptions(configDir);
+  const answers = {};
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  process.stdout.write("Configure agent models. Press Enter to keep the shown value; enter - to restore the package default.\n");
+  try {
+    for (const [key, label, packageDefault] of MODEL_ROLES) {
+      const shown = existing[key] || packageDefault;
+      const answer = (await prompt.question(`${label} [${shown}]: `)).trim();
+      const value = answer === "-" ? "" : (answer || existing[key] || "");
+      if (value && !value.includes("/")) throw new Error(`${label} model must include a provider prefix, for example provider/model.`);
+      answers[key] = value;
+    }
+  } finally {
+    prompt.close();
+  }
+  return answers;
+}
+
+async function installOrUpdate(useLatest) {
   const configDir = configDirectory();
+  const models = command === "install" && process.stdin.isTTY && process.stdout.isTTY
+    ? await promptForModels(configDir)
+    : undefined;
   const version = useLatest ? latestVersion() : packageVersion(packageRoot);
   const packageBackups = installPackage(configDir, version);
-  const result = writePluginConfig(configDir);
+  const result = writePluginConfig(configDir, false, models);
   try {
     validateOpenCode(configDir);
   } catch (error) {
@@ -74,6 +113,24 @@ function installOrUpdate(useLatest) {
   process.stdout.write(`Configured ${PACKAGE_NAME}@${version} in ${result.file}\n`);
   if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
   for (const backup of packageBackups) process.stdout.write(`Backup: ${backup}\n`);
+  process.stdout.write("Restart OpenCode intentionally to load the new configuration.\n");
+}
+
+async function configureAgents() {
+  const configDir = configDirectory();
+  if (!existsSync(join(configDir, "node_modules", PACKAGE_NAME, "package.json"))) {
+    throw new Error(`${PACKAGE_NAME} is not installed. Run the install command first.`);
+  }
+  const models = await promptForModels(configDir);
+  const result = writePluginConfig(configDir, false, models);
+  try {
+    validateOpenCode(configDir);
+  } catch (error) {
+    restoreBackup(result.file, result.backup, result.existed);
+    throw new Error(`OpenCode validation failed; restored the previous config. ${error.message}`);
+  }
+  process.stdout.write(`Configured agent models in ${result.file}\n`);
+  if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
   process.stdout.write("Restart OpenCode intentionally to load the new configuration.\n");
 }
 
@@ -102,14 +159,15 @@ function captureHookStatus() {
 }
 
 try {
-  if (command === "install") installOrUpdate(false);
-  else if (command === "update") installOrUpdate(true);
+  if (command === "install") await installOrUpdate(false);
+  else if (command === "update") await installOrUpdate(true);
+  else if (command === "configure-agents") await configureAgents();
   else if (command === "uninstall") uninstallOrchestration();
   else if (command === "install-hooks") installHooks();
   else if (command === "uninstall-hooks") uninstallHooks();
   else if (command === "status") fullStatus();
   else {
-    process.stderr.write("Usage: opencode-herdr-orchestration <install|update|status|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
+    process.stderr.write("Usage: opencode-herdr-orchestration <install|update|configure-agents|status|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
     process.exitCode = 2;
   }
 } catch (error) {

@@ -19,6 +19,7 @@ The installer:
 
 - locates the global OpenCode config directory;
 - installs an exact package version there;
+- interactively asks which models the shepherd, sheep worker, and shearer reviewer roles should use when run in a terminal;
 - preserves existing JSONC comments, trailing commas, plugins, and tuple options;
 - adds the stable file URL required by current OpenCode npm plugin loading;
 - creates timestamped backups of changed config and npm manifest files;
@@ -35,11 +36,14 @@ Inspect or remove the installation:
 
 ```bash
 npx -y opencode-herdr-orchestration@latest status
+npx -y opencode-herdr-orchestration@latest configure-agents
 npx -y opencode-herdr-orchestration@latest uninstall
 npx -y opencode-herdr-orchestration@latest uninstall --with-hooks
 ```
 
 After installation or update, quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration.
+
+`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`.
 
 ## Manual Installation
 
@@ -148,6 +152,7 @@ Plugin tuple options can override model defaults:
     [
       "opencode-herdr-orchestration",
       {
+        "shepherdModel": "anthropic/claude-sonnet-4-6",
         "workerModel": "litellm/glm-5.3-flash",
         "reviewerModel": "litellm-responses/gpt-5.6-terra"
       }
