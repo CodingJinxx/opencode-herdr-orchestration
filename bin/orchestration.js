@@ -14,10 +14,13 @@ import {
   PACKAGE_NAME,
   packageVersion,
   orchestrationOptions,
+  reconcileAgentFiles,
+  removeAgentFilesManifest,
   restoreBackup,
   status as installationStatus,
   uninstallPackage,
   validateOpenCode,
+  writeAgentFilesManifest,
   writePluginConfig,
 } from "../src/installer.js";
 
@@ -29,6 +32,8 @@ const [command, ...flags] = process.argv.slice(2);
 
 const MODEL_ROLES = [
   ["shepherdModel", "Shepherd agents", "OpenCode active model", "model"],
+  ["sheepdogModel", "Sheepdog agents", "litellm/glm-5.3-flash", "model"],
+  ["sheepdogVariant", "Sheepdog reasoning effort", "model default", "variant"],
   ["workerModel", "Sheep worker agents", "litellm/glm-5.3-flash", "model"],
   ["workerVariant", "Sheep worker reasoning effort", "model default", "variant"],
   ["reviewerModel", "Shearer review agents", "litellm-responses/gpt-5.6-terra", "model"],
@@ -98,6 +103,15 @@ async function promptForModels(configDir) {
   return answers;
 }
 
+function reportReconciliation(reconciliation) {
+  for (const relPath of reconciliation.deleted) {
+    process.stdout.write(`Removed obsolete package-owned agent file: ${relPath}\n`);
+  }
+  for (const item of reconciliation.remediation) {
+    process.stdout.write(`Action required (${item.reason}): ${item.remediation}\n`);
+  }
+}
+
 async function installOrUpdate(useLatest) {
   const configDir = configDirectory();
   const models = command === "install" && process.stdin.isTTY && process.stdout.isTTY
@@ -112,8 +126,11 @@ async function installOrUpdate(useLatest) {
     restoreBackup(result.file, result.backup, result.existed);
     throw new Error(`OpenCode validation failed; restored the previous config. ${error.message}`);
   }
+  const reconciliation = reconcileAgentFiles(configDir, { remove: false });
+  writeAgentFilesManifest(configDir, reconciliation.manifestEntries, version);
   if (flags.includes("--with-hooks")) installHooks();
   process.stdout.write(`Configured ${PACKAGE_NAME}@${version} in ${result.file}\n`);
+  reportReconciliation(reconciliation);
   if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
   for (const backup of packageBackups) process.stdout.write(`Backup: ${backup}\n`);
   process.stdout.write("Restart OpenCode intentionally to load the new configuration.\n");
@@ -141,8 +158,14 @@ function uninstallOrchestration() {
   const configDir = configDirectory();
   const result = writePluginConfig(configDir, true);
   const packageBackups = uninstallPackage(configDir);
+  const reconciliation = reconcileAgentFiles(configDir, { remove: true });
+  removeAgentFilesManifest(configDir);
   if (flags.includes("--with-hooks")) uninstallHooks();
   process.stdout.write(`Removed orchestration plugin configuration from ${result.file}\n`);
+  for (const relPath of reconciliation.deleted) {
+    process.stdout.write(`Removed package-owned agent file: ${relPath}\n`);
+  }
+  reportReconciliation(reconciliation);
   if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
   for (const backup of packageBackups) process.stdout.write(`Backup: ${backup}\n`);
 }
