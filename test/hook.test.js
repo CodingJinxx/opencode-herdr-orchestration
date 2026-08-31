@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const hook = resolve("hooks/pre-push");
 
@@ -12,7 +12,7 @@ function git(cwd, ...args) {
 }
 
 function runHook(cwd, mode, input) {
-  const shell = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\sh.exe" : "/bin/sh";
+  const shell = process.platform === "win32" ? windowsGitShell() : "/bin/sh";
   return spawnSync(shell, [hook, "origin", "unused"], {
     cwd,
     encoding: "utf8",
@@ -20,6 +20,14 @@ function runHook(cwd, mode, input) {
     env: { ...process.env, SHEPHERD_MODE: mode },
     windowsHide: true,
   });
+}
+
+function windowsGitShell() {
+  const gitExecutable = execFileSync("where.exe", ["git"], { encoding: "utf8" })
+    .split(/\r?\n/)
+    .find((line) => line.trim().toLowerCase().endsWith("git.exe"));
+  if (!gitExecutable) throw new Error("Unable to locate Git for Windows.");
+  return resolve(dirname(dirname(gitExecutable.trim())), "bin", "sh.exe");
 }
 
 function repository(branch = "feature") {

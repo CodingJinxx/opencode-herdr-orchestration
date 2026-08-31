@@ -4,6 +4,8 @@ Capability-separated OpenCode agents for planning, implementation, independent r
 
 This package registers the agents, provides complete structured worker-response retrieval, injects session-specific orchestration mode into shell environments, and ships a reproducible Git `pre-push` policy for new and existing repositories.
 
+Requires Node.js 22.22.2 or newer when running the package CLI or tests.
+
 ## Architecture
 
 ```text
@@ -73,7 +75,13 @@ OpenCode loads plugins and agent definitions at startup. Restart OpenCode when i
 
 ## Install the Git policy
 
-Run once after installing or from this checkout:
+Run once after installing the npm package:
+
+```bash
+npx opencode-herdr-orchestration install-hooks
+```
+
+Or run directly from this checkout:
 
 ```powershell
 node C:\Dev\opencode-herdr-orchestration\bin\orchestration.js install-hooks
@@ -89,7 +97,14 @@ as global `core.hooksPath`. Every new clone, initialized repository, and linked 
 
 The installer refuses to replace an existing global `core.hooksPath`. Review and compose existing hooks first; `--force` is available only for an intentional replacement.
 
-Inspect or remove the setting:
+Inspect or remove the setting from an installed package:
+
+```bash
+npx opencode-herdr-orchestration status
+npx opencode-herdr-orchestration uninstall-hooks
+```
+
+From this checkout:
 
 ```powershell
 node .\bin\orchestration.js status
@@ -242,7 +257,7 @@ CI runs syntax checks, tests, and an npm package dry run on every branch push an
 
 Releases are triggered only by tags shaped like `vMAJOR.MINOR.PATCH`. The release workflow verifies that the strict semantic version in the tag exactly matches `package.json`, reruns all checks, publishes the public npm package with provenance, and creates a GitHub release with generated notes.
 
-Configure the repository Actions secret once before the first release:
+The release job uses the protected GitHub environment named `npm`. Configure the repository Actions secret once before the first release:
 
 ```bash
 gh secret set NPM_TOKEN --repo CodingJinxx/opencode-herdr-orchestration
@@ -257,6 +272,8 @@ git push origin master --follow-tags
 
 The workflow intentionally fails before publishing when the tag and package version differ. It does not publish prerelease tags such as `v1.0.0-beta.1`.
 
+For stronger release control, configure required reviewers on the `npm` environment and require the CI check on the protected default branch. The release is retry-safe: if npm already contains the same version from the same commit, it skips republishing and resumes GitHub release creation; a version published from another commit fails closed.
+
 ## Known limitations
 
 - OpenCode command patterns cannot prove semantic Git intent; the hook adds checks but server-side protection is still required.
@@ -264,3 +281,4 @@ The workflow intentionally fails before publishing when the tag and package vers
 - Global `core.hooksPath` is singular. Existing hook frameworks must be composed rather than overwritten.
 - PR commands are narrowly available to `shepherd-build`, but work only in GitHub repositories with an authenticated `gh` installation.
 - Agent registration and environment hooks take effect only in newly started OpenCode processes.
+- Worker session exports are capped at 64 MiB by default to bound host memory use. The response tool returns `SESSION_EXPORT_TOO_LARGE` rather than loading a larger session.

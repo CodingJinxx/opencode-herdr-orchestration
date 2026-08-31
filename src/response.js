@@ -18,7 +18,8 @@ const MIN_PAGE_BYTES = 1024;
 const MAX_PAGE_BYTES = 16384;
 const MAX_TOOL_OUTPUT_BYTES = 32768;
 const DEFAULT_CURSOR_TTL_MS = 6 * 60 * 60 * 1000;
-const MAX_PROCESS_BUFFER = 256 * 1024 * 1024;
+const DEFAULT_MAX_EXPORT_BYTES = 64 * 1024 * 1024;
+const MAX_HERDR_OUTPUT_BYTES = 1024 * 1024;
 
 function error(code, message, retryable = false) {
   return { ok: false, error: { code, message, retryable } };
@@ -88,10 +89,10 @@ function parseJsonOutput(output, label) {
   return JSON.parse(output.slice(start));
 }
 
-async function defaultRun(command, args, signal) {
+async function defaultRun(command, args, signal, maxBuffer) {
   const { stdout } = await execFileAsync(command, args, {
     encoding: "utf8",
-    maxBuffer: MAX_PROCESS_BUFFER,
+    maxBuffer,
     windowsHide: true,
     signal,
   });
@@ -240,10 +241,10 @@ function validateTarget(target) {
   return { ok: true };
 }
 
-async function resolveInitialResponse(target, run, signal) {
+async function resolveInitialResponse(target, run, signal, maxExportBytes) {
   let agent;
   try {
-    const output = await run("herdr", ["agent", "get", target], signal);
+    const output = await run("herdr", ["agent", "get", target], signal, MAX_HERDR_OUTPUT_BYTES);
     agent = parseJsonOutput(output, "herdr agent get").result?.agent;
   } catch (cause) {
     const detail = processErrorDetail(cause);
@@ -266,7 +267,7 @@ async function resolveInitialResponse(target, run, signal) {
   ) {
     return error("AGENT_NOT_OPENCODE", `Herdr agent ${target} does not expose a trusted OpenCode session ID.`);
   }
-  const exported = await exportSession(session.value, run, signal);
+  const exported = await exportSession(session.value, run, signal, maxExportBytes);
   if (!exported.ok) return exported;
   const selected = selectLatestCompletedResponse(exported.value);
   if (!selected.ok) return selected;
@@ -282,13 +283,18 @@ async function resolveInitialResponse(target, run, signal) {
   return selected;
 }
 
-async function exportSession(sessionID, run, signal) {
+async function exportSession(sessionID, run, signal, maxExportBytes) {
   try {
-    const output = await run("opencode", ["export", sessionID], signal);
+    const output = await run("opencode", ["export", sessionID], signal, maxExportBytes);
     return { ok: true, value: parseJsonOutput(output, "opencode export") };
   } catch (cause) {
     const detail = processErrorDetail(cause);
-    const code = detail.toLowerCase().includes("not found") ? "SESSION_NOT_FOUND" : "SESSION_EXPORT_FAILED";
+    const code =
+      cause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+        ? "SESSION_EXPORT_TOO_LARGE"
+        : detail.toLowerCase().includes("not found")
+          ? "SESSION_NOT_FOUND"
+          : "SESSION_EXPORT_FAILED";
     return error(code, `Unable to export OpenCode session ${sessionID}: ${detail}`, code === "SESSION_EXPORT_FAILED");
   }
 }
@@ -298,6 +304,11 @@ export function createResponseService(options = {}) {
   const secret = options.secret ?? randomBytes(32);
   const now = options.now ?? Date.now;
   const cursorTtlMs = options.cursorTtlMs ?? DEFAULT_CURSOR_TTL_MS;
+  const maxExportBytes = options.maxExportBytes ?? DEFAULT_MAX_EXPORT_BYTES;
+
+  if (!Number.isSafeInteger(maxExportBytes) || maxExportBytes < 1024 * 1024) {
+    throw new TypeError("maxExportBytes must be an integer of at least 1048576 bytes.");
+  }
 
   return async function retrieve(args, context) {
     if (!ALLOWED_CALLERS.has(context?.agent)) {
@@ -312,7 +323,7 @@ export function createResponseService(options = {}) {
     if (args.target) {
       const valid = validateTarget(args.target);
       if (!valid.ok) return valid;
-      const selected = await resolveInitialResponse(args.target, run, context.abort);
+      const selected = await resolveInitialResponse(args.target, run, context.abort, maxExportBytes);
       if (!selected.ok) return selected;
       return makePage({
         response: selected.response,
@@ -326,7 +337,7 @@ export function createResponseService(options = {}) {
 
     const decoded = decodeCursor(args.cursor, secret, now);
     if (!decoded.ok) return decoded;
-    const exported = await exportSession(decoded.payload.sessionID, run, context.abort);
+    const exported = await exportSession(decoded.payload.sessionID, run, context.abort, maxExportBytes);
     if (!exported.ok) return exported;
     const pinned = findPinnedResponse(exported.value, decoded.payload.messageID);
     if (!pinned.ok) return pinned;

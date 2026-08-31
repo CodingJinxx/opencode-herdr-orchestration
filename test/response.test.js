@@ -224,3 +224,20 @@ test("uses argv execution rather than interpolating target text", async () => {
   assert.equal(result.ok, true);
   assert.deepEqual(calls[0], ["herdr", ["agent", "get", "worker_1"]]);
 });
+
+test("returns a specific error when a session export exceeds the configured limit", async () => {
+  const failure = Object.assign(new Error("stdout maxBuffer length exceeded"), {
+    code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+  });
+  const retrieve = createResponseService({
+    run: async (command) => {
+      if (command === "herdr") return herdrAgent();
+      throw failure;
+    },
+    secret: Buffer.alloc(32, 7),
+    maxExportBytes: 1024 * 1024,
+  });
+  const result = await retrieve({ target: "worker_1" }, context);
+  assert.equal(result.error.code, "SESSION_EXPORT_TOO_LARGE");
+  assert.equal(result.error.retryable, false);
+});

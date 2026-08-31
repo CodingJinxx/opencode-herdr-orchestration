@@ -11,14 +11,37 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22.22.2, 24]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288ca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run
+      - name: Verify packed CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(npm pack --silent)"
+          npm install --global "$package"
+          opencode-herdr-orchestration status
+
+  gate:
+    name: CI
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all matrix jobs
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = "success"

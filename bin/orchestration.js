@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +40,8 @@ function install() {
 function uninstall() {
   if (currentHooksPath() === hooksPath) {
     git(["config", "--global", "--unset", "core.hooksPath"]);
-    process.stdout.write("Removed the orchestration global core.hooksPath setting.\n");
+    rmSync(hooksPath, { recursive: true, force: true });
+    process.stdout.write("Removed the orchestration global core.hooksPath setting and installed hook.\n");
   } else {
     process.stdout.write("Global core.hooksPath does not point at this package; nothing changed.\n");
   }
@@ -51,6 +52,7 @@ function status() {
     configuredHooksPath: currentHooksPath() || null,
     expectedHooksPath: hooksPath,
     hookInstalled: existsSync(installedHook),
+    active: currentHooksPath() === hooksPath && existsSync(installedHook),
   }, null, 2)}\n`);
 }
 
