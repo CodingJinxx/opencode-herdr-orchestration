@@ -2,6 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import plugin from "../src/index.js";
+import * as packageEntry from "../src/plugin.js";
+
+test("npm package entry exports only the server plugin", () => {
+  assert.deepEqual(Object.keys(packageEntry), ["server"]);
+  assert.equal(packageEntry.server, plugin);
+});
 
 test("registers agents and injects per-session modes", async () => {
   const hooks = await plugin({}, {});

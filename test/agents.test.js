@@ -67,6 +67,17 @@ test("allows user overrides without dropping default permissions", () => {
   assert.equal(merged.permission.edit, "deny");
 });
 
+test("applies declarative shepherd-build local overrides", () => {
+  const agents = createAgents({
+    shepherdBuildPermissions: {
+      private_deployment_status: "allow",
+    },
+    shepherdBuildPromptAppend: "Use private deployment tools when available.",
+  });
+  assert.equal(agents["shepherd-build"].permission.private_deployment_status, "allow");
+  assert.match(agents["shepherd-build"].prompt, /Use private deployment tools when available\.$/);
+});
+
 test("maps agents to hook enforcement modes", () => {
   assert.equal(modeForAgent("shepherd-plan"), "plan");
   assert.equal(modeForAgent("shepherd-build"), "build");

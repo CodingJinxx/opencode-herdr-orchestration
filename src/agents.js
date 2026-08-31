@@ -77,6 +77,8 @@ export function mergeAgent(defaults, override) {
 export function createAgents(options = {}) {
   const workerModel = options.workerModel ?? "litellm/glm-5.3-flash";
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
+  const shepherdBuildPermissions = options.shepherdBuildPermissions ?? {};
+  const shepherdBuildPrompt = appendPrompt(SHEPHERD_BUILD_PROMPT, options.shepherdBuildPromptAppend);
 
   return {
     "shepherd-plan": {
@@ -128,7 +130,7 @@ export function createAgents(options = {}) {
     "shepherd-build": {
       mode: "primary",
       description: "Executes approved plans through planning, implementation, and independent review workers.",
-      prompt: SHEPHERD_BUILD_PROMPT,
+      prompt: shepherdBuildPrompt,
       permission: {
         grep: "allow",
         edit: markdownOnly,
@@ -173,6 +175,7 @@ export function createAgents(options = {}) {
           ...separatorDenials,
         },
         task: "deny",
+        ...shepherdBuildPermissions,
       },
     },
 
@@ -228,6 +231,14 @@ export function createAgents(options = {}) {
     "shearer-review-low": reviewerAgent(reviewerModel, "low"),
     "shearer-review-medium": reviewerAgent(reviewerModel, "medium"),
   };
+}
+
+function appendPrompt(prompt, addition) {
+  if (addition === undefined || addition === "") return prompt;
+  if (typeof addition !== "string") {
+    throw new TypeError("shepherdBuildPromptAppend must be a string.");
+  }
+  return `${prompt.trimEnd()}\n\n${addition.trim()}`;
 }
 
 function reviewerAgent(model, variant) {
