@@ -14,7 +14,7 @@
   "type": "module",
   "exports": "./src/index.js",
   "bin": {
-    "opencode-herdr-orchestration": "./bin/orchestration.js"
+    "opencode-herdr-orchestration": "bin/orchestration.js"
   },
   "files": [
     "bin",
