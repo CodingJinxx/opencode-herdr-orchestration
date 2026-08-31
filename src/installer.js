@@ -1,14 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import spawn from "cross-spawn";
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
 
 export const PACKAGE_NAME = "opencode-herdr-orchestration";
-const NPM_COMMAND = process.platform === "win32" ? process.execPath : "npm";
-const NPM_PREFIX = process.platform === "win32" ? [resolveNpmCli()] : [];
-const OPENCODE_COMMAND = process.platform === "win32" ? "opencode.exe" : "opencode";
+const NPM_COMMAND = "npm";
+const OPENCODE_COMMAND = "opencode";
 export const AGENT_NAMES = [
   "shepherd-plan",
   "shepherd-build",
@@ -17,22 +16,6 @@ export const AGENT_NAMES = [
   "shearer-review-low",
   "shearer-review-medium",
 ];
-
-function resolveWindowsCommand(name) {
-  try {
-    return execFileSync("where.exe", [name], { encoding: "utf8", windowsHide: true })
-      .split(/\r?\n/)
-      .find(Boolean)
-      .trim();
-  } catch {
-    return name;
-  }
-}
-
-function resolveNpmCli() {
-  const npmShim = resolveWindowsCommand("npm.cmd");
-  return join(dirname(npmShim), "node_modules", "npm", "bin", "npm-cli.js");
-}
 
 export function configDirectory(env = process.env) {
   if (env.OPENCODE_CONFIG_DIR) return resolve(env.OPENCODE_CONFIG_DIR);
@@ -99,12 +82,21 @@ export function backupFile(file, now = new Date()) {
 }
 
 function run(command, args, options = {}) {
-  return execFileSync(command, args, {
+  const result = spawn.sync(command, args, {
     encoding: "utf8",
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
     ...options,
-  }).trim();
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const error = new Error(`${command} exited with status ${result.status}.`);
+    error.status = result.status;
+    error.stdout = result.stdout;
+    error.stderr = result.stderr;
+    throw error;
+  }
+  return result.stdout.trim();
 }
 
 export function installedVersion(configDir) {
@@ -118,7 +110,7 @@ export function packageVersion(packageRoot) {
 }
 
 export function latestVersion() {
-  return JSON.parse(run(NPM_COMMAND, [...NPM_PREFIX, "view", PACKAGE_NAME, "version", "--json", "--prefer-online"]));
+  return JSON.parse(run(NPM_COMMAND, ["view", PACKAGE_NAME, "version", "--json", "--prefer-online"]));
 }
 
 export function installPackage(configDir, version) {
@@ -126,7 +118,7 @@ export function installPackage(configDir, version) {
   const backups = ["package.json", "package-lock.json"]
     .map((name) => backupFile(join(configDir, name)))
     .filter(Boolean);
-  run(NPM_COMMAND, [...NPM_PREFIX, "install", "--save-exact", `${PACKAGE_NAME}@${version}`], { cwd: configDir });
+  run(NPM_COMMAND, ["install", "--save-exact", `${PACKAGE_NAME}@${version}`], { cwd: configDir });
   return backups;
 }
 
@@ -135,7 +127,7 @@ export function uninstallPackage(configDir) {
     .map((name) => backupFile(join(configDir, name)))
     .filter(Boolean);
   try {
-    run(NPM_COMMAND, [...NPM_PREFIX, "uninstall", PACKAGE_NAME], { cwd: configDir });
+    run(NPM_COMMAND, ["uninstall", PACKAGE_NAME], { cwd: configDir });
   } catch {}
   return backups;
 }

@@ -4,7 +4,7 @@ Capability-separated OpenCode agents for planning, implementation, independent r
 
 This package registers the agents, provides complete structured worker-response retrieval, injects session-specific orchestration mode into shell environments, and ships a reproducible Git `pre-push` policy for new and existing repositories.
 
-Requires Node.js 22.22.2 or newer when running the package CLI or tests.
+Requires Node.js 20 or newer when running the package CLI or tests.
 
 ## Installation
 
