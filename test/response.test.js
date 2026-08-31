@@ -164,7 +164,8 @@ test("rejects unauthorized callers, active workers, invalid targets, and cursor 
   assert.equal((await active({ target: "worker_1" }, context)).error.code, "AGENT_NOT_SETTLED");
 
   const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
-  const tampered = `${first.cursor.slice(0, -1)}${first.cursor.endsWith("a") ? "b" : "a"}`;
+  const [payload, signature] = first.cursor.split(".");
+  const tampered = `${payload.startsWith("a") ? "b" : "a"}${payload.slice(1)}.${signature}`;
   assert.equal((await retrieve({ cursor: tampered }, context)).error.code, "INVALID_CURSOR");
 });
 
