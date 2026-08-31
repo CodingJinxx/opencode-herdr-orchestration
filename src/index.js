@@ -4,11 +4,12 @@ import { createResponseTool } from "./response.js";
 const SESSION_MODES = new Map();
 
 function modeForAgent(agent) {
-  if (agent === "shepherd-plan") return "plan";
-  if (agent === "shepherd-build") return "build";
-  if (agent === "shearer-review-low" || agent === "shearer-review-medium") return "review";
-  if (agent === "sheep-plan") return "sheep-plan";
-  if (agent === "sheep-build") return "sheep-build";
+  if (agent === "shepherd") return "shepherd";
+  if (agent === "shepherd-governor") return "governor";
+  if (agent === "sheepdog") return "sheepdog";
+  if (agent === "grazer") return "grazer";
+  if (agent === "sheep") return "sheep";
+  if (agent === "shearer-low" || agent === "shearer-medium") return "shearer";
   return "none";
 }
 
