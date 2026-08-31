@@ -103,6 +103,7 @@ test("configures agent models while preserving plugin options and comments", () 
   const updated = updateAgentModels(source, entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
+    workerVariant: "high",
     reviewerModel: "provider/reviewer",
   });
   assert.match(updated, /Keep this comment/);
@@ -110,6 +111,7 @@ test("configures agent models while preserving plugin options and comments", () 
   assert.deepEqual(orchestrationOptions(updated), {
     private: true,
     workerModel: "provider/worker",
+    workerVariant: "high",
     shepherdModel: "provider/shepherd",
     reviewerModel: "provider/reviewer",
   });
@@ -118,9 +120,9 @@ test("configures agent models while preserving plugin options and comments", () 
 test("empty model choices restore package defaults", () => {
   const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
   const source = JSON.stringify({
-    plugin: [[entry, { workerModel: "custom/worker", reviewerModel: "custom/reviewer", keep: true }]],
+    plugin: [[entry, { workerModel: "custom/worker", workerVariant: "high", reviewerModel: "custom/reviewer", keep: true }]],
   });
-  const updated = updateAgentModels(source, entry, { workerModel: "", reviewerModel: "" });
+  const updated = updateAgentModels(source, entry, { workerModel: "", workerVariant: "", reviewerModel: "" });
   assert.deepEqual(orchestrationOptions(updated), { keep: true });
 });
 
@@ -129,11 +131,13 @@ test("promotes a first-time plugin registration to model options", () => {
   const updated = updateAgentModels("{}", entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
+    workerVariant: "low",
     reviewerModel: "provider/reviewer",
   });
   assert.deepEqual(parse(updated).plugin, [[entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
+    workerVariant: "low",
     reviewerModel: "provider/reviewer",
   }]]);
 });
