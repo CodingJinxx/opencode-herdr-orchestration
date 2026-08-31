@@ -104,6 +104,26 @@ Plugin tuple options can override model defaults:
 }
 ```
 
+Machine-specific `shepherd-build` permissions and instructions can also be added declaratively without a local JavaScript wrapper:
+
+```jsonc
+{
+  "plugin": [
+    [
+      "opencode-herdr-orchestration",
+      {
+        "shepherdBuildPermissions": {
+          "private_deployment_status": "allow"
+        },
+        "shepherdBuildPromptAppend": "Use private deployment tools according to local policy."
+      }
+    ]
+  ]
+}
+```
+
+`shepherdBuildPermissions` is merged over the package's `shepherd-build` permissions. `shepherdBuildPromptAppend` is appended as a separate final paragraph. Keep secrets out of plugin options because configuration may be displayed by diagnostics.
+
 Local agent definitions with the same names are merged over plugin defaults. This permits deliberate user customization without losing unspecified plugin permissions or prompts.
 
 Machine- or organization-specific MCP tools, deployment rules, and private service instructions should stay in a local `shepherd-build` override rather than this public package. Add only the private permissions and prompt additions required by your environment; unspecified package defaults remain intact through deep merging.
