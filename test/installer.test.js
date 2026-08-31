@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { parse } from "jsonc-parser";
 
 import { backupFile, isOrchestrationPlugin, packageEntry, restoreBackup, updatePluginConfig } from "../src/installer.js";
@@ -106,6 +106,23 @@ test("removes a first-time config after failed validation", () => {
   writeFileSync(file, "broken", "utf8");
   restoreBackup(file, null, false);
   assert.equal(existsSync(file), false);
+});
+
+test("runs through Windows command shims", { skip: process.platform !== "win32" }, () => {
+  const home = mkdtempSync(join(tmpdir(), "orchestration-shim-"));
+  const bin = join(home, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, "opencode.cmd"),
+    '@echo off\r\nif "%1"=="agent" (echo shepherd-build ^(primary^)& exit /b 0)\r\necho {"name":"shepherd-build"}\r\n',
+    "utf8",
+  );
+  const result = spawnSync(process.execPath, [cli, "status"], {
+    encoding: "utf8",
+    env: { ...environment(home), PATH: `${bin}${delimiter}${process.env.PATH}` },
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("refuses to replace an existing hooks path without force", () => {

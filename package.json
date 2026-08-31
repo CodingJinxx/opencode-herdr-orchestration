@@ -1,6 +1,6 @@
 {
   "name": "opencode-herdr-orchestration",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Capability-separated Herdr orchestration agents for OpenCode",
   "author": "CodingJinxx",
   "repository": {
@@ -31,13 +31,7 @@
     "check": "node --check src/plugin.js && node --check src/index.js && node --check src/agents.js && node --check src/prompts.js && node --check src/response.js && node --check bin/orchestration.js"
   },
   "engines": {
-    "node": ">=22.22.2"
-  },
-  "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.3.0 <2"
-  },
-  "devDependencies": {
-    "@opencode-ai/plugin": "1.3.14"
+    "node": ">=20"
   },
   "keywords": [
     "opencode",
@@ -47,6 +41,8 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@opencode-ai/plugin": "1.3.14",
+    "cross-spawn": "7.0.6",
     "jsonc-parser": "3.3.1"
   }
 }
