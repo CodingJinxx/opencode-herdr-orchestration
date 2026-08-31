@@ -52,6 +52,12 @@ const herdrInspection = {
   "herdr pane layout*": "allow",
   "herdr pane split*": "allow",
   "herdr pane read*": "allow",
+  "herdr worktree": "allow",
+  "herdr worktree list*": "allow",
+  "herdr worktree create *": "allow",
+  "herdr worktree open *": "allow",
+  "herdr worktree remove --workspace *": "allow",
+  "herdr worktree remove * --force*": "deny",
 };
 
 const markdownOnly = {
