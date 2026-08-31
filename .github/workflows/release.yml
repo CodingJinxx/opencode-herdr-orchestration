@@ -34,20 +34,19 @@ jobs:
       - run: npm test
       - name: Publish npm package
         id: publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
-          if published_sha="$(npm view "$name@$version" dist.gitHead 2>/dev/null)"; then
-            test "$published_sha" = "$GITHUB_SHA"
-            echo "Version $version is already published from this commit; continuing."
+          local_integrity="$(npm pack --json --dry-run | node -e "let input=''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => process.stdout.write(JSON.parse(input)[0].integrity))")"
+          if published_integrity="$(npm view "$name@$version" dist.integrity 2>/dev/null)"; then
+            test "$published_integrity" = "$local_integrity"
+            echo "Version $version is already published with identical package bytes; continuing."
           else
-            lookup_error="$(npm view "$name@$version" dist.gitHead 2>&1 >/dev/null || true)"
+            lookup_error="$(npm view "$name@$version" dist.integrity 2>&1 >/dev/null || true)"
             if printf '%s\n' "$lookup_error" | grep -q 'E404'; then
-              npm publish --access public --provenance
+              npm publish --access public
             else
               printf '%s\n' "$lookup_error" >&2
               exit 1
