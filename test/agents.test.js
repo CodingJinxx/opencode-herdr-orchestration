@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { createAgents, mergeAgent } from "../src/agents.js";
 import { modeForAgent } from "../src/index.js";
+import { SHEPHERD_BUILD_PROMPT, SHEPHERD_PLAN_PROMPT } from "../src/prompts.js";
 
 test("registers the closed agent topology", () => {
   const agents = createAgents();
@@ -73,4 +74,11 @@ test("maps agents to hook enforcement modes", () => {
   assert.equal(modeForAgent("sheep-build"), "sheep-build");
   assert.equal(modeForAgent("shearer-review-medium"), "review");
   assert.equal(modeForAgent("build"), "none");
+});
+
+test("preserves critical orchestration behavior from standalone prompts", () => {
+  assert.match(SHEPHERD_PLAN_PROMPT, /installed CLI is authoritative/);
+  assert.match(SHEPHERD_PLAN_PROMPT, /Treat unknown as inconclusive/);
+  assert.match(SHEPHERD_PLAN_PROMPT, /Synthesize worker findings/);
+  assert.match(SHEPHERD_BUILD_PROMPT, /dedicated branch and worktree/);
 });
