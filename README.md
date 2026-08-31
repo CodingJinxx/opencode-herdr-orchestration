@@ -37,20 +37,20 @@ Shepherd (conceptual — the human operator, one per flock)
 │   └── grazer                          read-only research
 │
 └── Governance phase: shepherd-governor
-    ├── sheepdog                        herds the working flock
     ├── grazer                          read-only research
-    ├── sheep                           bounded implementation
-    ├── shearer-low                     independent review, low reasoning
-    └── shearer-medium                  independent review, medium reasoning
+    └── sheepdog                        herds the working flock
+        ├── sheep                       bounded implementation
+        ├── shearer-low                 independent review, low reasoning
+        └── shearer-medium              independent review, medium reasoning
 ```
 
 ## Roles and authorities
 
 | Agent | Tier | Direct mutation | Spawns | Git authority |
 | --- | --- | --- | --- | --- |
-| `shepherd` | Strong (inherits active model) | Markdown plans, research notes, task briefs, handoffs | `grazer` only | Markdown commits; current non-protected branch push |
-| `shepherd-governor` | Strong (inherits active model) | Markdown briefs, handoffs, review notes | `sheepdog`, `grazer`, `sheep`, `shearer-low`, `shearer-medium` | Integration, push, PR, merge, delivery |
-| `sheepdog` | Fast worker (`litellm/glm-5.3-flash`) | None | None | Local integration of worker output; no push |
+| `shepherd` | Strong (inherits active model) | Markdown plans, research notes, task briefs, handoffs | `grazer` only | Local Markdown commits only; no push |
+| `shepherd-governor` | Strong (inherits active model) | Markdown briefs, handoffs, review notes | `grazer`, `sheepdog` | Integration, push, PR, merge, delivery |
+| `sheepdog` | Fast worker (`litellm/glm-5.3-flash`) | None | `grazer`, `sheep`, `shearer-low`, `shearer-medium` | Local integration of worker output; no push |
 | `grazer` | Fast worker (`litellm/glm-5.3-flash`) | None | None | Read-only inspection |
 | `sheep` | Fast worker (`litellm/glm-5.3-flash`) | Assigned implementation | None | Local task commit only |
 | `shearer-low` | Reviewer (`litellm-responses/gpt-5.6-terra`, low) | None | None | Read-only inspection |
@@ -79,6 +79,15 @@ Base-Commit: <full commit hash>
 Status: PROPOSED
 ```
 
+### Worker reply protocol
+
+Worker replies are keyword-prefixed structured messages with two distinct channels:
+
+- **Acknowledgement replies** open a worker's first response to a task contract: `ACK` (contract accepted, work starting), `CORRECT` (contract must be corrected first), `REPLAN` (contract conflicts with the approved plan or repository evidence), or `STOP` (blocked outright).
+- **Milestone replies** report completed milestones: `CONTINUE` (ready for the next milestone), `CORRECT` (defects need correction within the current task), `REPLAN` (evidence invalidates the plan; escalation for re-planning), `STOP` (blocked after a milestone), or `FINALIZE` (all milestones complete, final report follows).
+
+`ACK` confirms receipt only and is never milestone progress; `FINALIZE` closes a task and is never an acknowledgement. `CORRECT`, `REPLAN`, and `STOP` are legal on either channel.
+
 ### No chain of thought
 
 Shepherd-phase agents govern by contracts and results, not by reading worker reasoning. The `herdr_agent_response` tool returns only the latest completed final assistant message: intermediate tool-call steps, errors, ignored text, reasoning, and terminal rendering are excluded at the source. Shearers likewise receive fresh bounded context — user goal, approved plan, task contract, base and implementation commits, diff, and verification results — never the worker conversation.
@@ -105,29 +114,30 @@ Task contracts carry explicit `escalate_if` conditions. Flock workers must escal
 
 ### Local integration and conflict delegation
 
-Parallel `sheep` workers each get a dedicated branch and worktree with non-overlapping ownership and an explicit integration order. The sheepdog performs local integration of worker output under the governor's contracts; the governor owns the result and resolves whatever integration surfaces: mechanical drift is reported as deviations, and real conflicts are resolved by re-scoping ownership or issuing bounded recovery tasks to the responsible sheep. The flock never pushes, merges, opens PRs, or delivers; all integration stays local until the delivery authority pushes.
+The governor prepares each parallel `sheep` worker a dedicated branch and worktree with non-overlapping ownership and an explicit integration order. The sheepdog performs local integration of worker output under the governor's contracts, using a narrow merge and cherry-pick lifecycle (`git merge --ff-only`, `git merge --no-ff --no-edit`, `git cherry-pick`, and their continue/abort/quit forms); the governor owns the result and resolves whatever integration surfaces: mechanical drift is reported as deviations, and real conflicts are resolved by re-scoping ownership or issuing bounded recovery tasks to the responsible sheep. No flock role pushes, opens PRs, or delivers; all integration stays local until the delivery authority pushes.
 
 ## State storage
 
-All durable orchestration state lives in **Git**, not in agent memory or plugin process state:
+All durable orchestration state lives outside agent memory and plugin process state, in two places:
 
-- Plans, research notes, task briefs, handoffs, and review notes are committed Markdown artifacts.
-- Worker output is a verified local commit; progress is Git history, reviewable and revertable.
-- Every worktree the flock creates — including worktrees created from other worktrees — is a **peer that shares the same Git common repository**, never a nested checkout. Committed state is visible to every worktree immediately, so a plan written in one worktree governs workers in all of them, and orchestration state survives session ends, process restarts, and machine reboots.
+- **The constrained orchestration state API.** Four plugin tools store and retrieve Markdown artifacts with JSON frontmatter under the repository's shared Git common directory: `herdr_plan_write` and `herdr_plan_read` for plan artifacts (shepherd and shepherd-governor), and `herdr_execution_write` and `herdr_execution_read` for execution artifacts (sheepdog). Artifacts live at `<git-common-dir>/herdr/plans/<planId>.md` and `<git-common-dir>/herdr/executions/<planId>.md`. Writes are atomic; the service invokes only read-only `git rev-parse`; Markdown bodies are capped at 1 MiB; plan IDs are 1–64 characters of letters, digits, dot, underscore, or hyphen.
+- **Git history.** Shepherd-phase agents may commit intended Markdown planning artifacts locally, and worker output is a verified local commit; progress is Git history, reviewable and revertable.
 
-Everything not in Git is explicitly ephemeral: `SHEPHERD_MODE` is injected per OpenCode session and dies with the session; response cursors are HMAC-signed with a per-plugin-process secret, expire after six hours, and do not survive a restart of the shepherd's OpenCode plugin process. If durable state matters, it must be committed.
+Every worktree the governor creates — including worktrees created from other worktrees — is a **peer that shares the same Git common repository**, never a nested checkout. Because the state API stores artifacts under the common directory, a plan written in one worktree governs workers in all of them, and orchestration state survives session ends, process restarts, and machine reboots. Separate clones never share this state.
+
+Everything not stored this way is explicitly ephemeral: `SHEPHERD_MODE` is injected per OpenCode session and dies with the session; response cursors are HMAC-signed with a per-plugin-process secret, expire after six hours, and do not survive a restart of the shepherd's OpenCode plugin process.
 
 ## Git authority
 
 | Mode | Hook behavior |
 | --- | --- |
-| Planning phase | Allows only the attached current branch to the same non-protected remote branch |
-| Governance phase | Does not add planning restrictions; the delivery authority owns remote Git |
+| Planning phase (`shepherd`) | Denies every push; delivery belongs to the governance phase |
+| Governance phase (`governor`) | Allows only the current attached branch pushed to the same remote branch |
 | Flock workers (sheepdog, grazer, sheep) | Denies every push |
-| Shearers (review) | Denies every push |
+| Shearers (shearer-low, shearer-medium) | Denies every push |
 | Missing/unknown | Does not interfere with normal human Git use |
 
-The hook rejects detached-HEAD planning pushes, protected branches, ref renames, unrelated refs, and deletions. `main` and `master` are always protected in planning mode; add repository-specific branches:
+The hook rejects pushes from detached HEAD in governance mode, protected branches, ref renames, unrelated refs, and remote ref deletions. In governance mode `main` and `master` are always protected; add repository-specific branches:
 
 ```bash
 git config --add orchestration.protectedBranch production
@@ -140,7 +150,7 @@ The hook and OpenCode Bash matchers are defense in depth, not a security sandbox
 
 ## Response topology
 
-The `herdr_agent_response` OpenCode tool retrieves completed responses from Herdr-managed OpenCode workers without reading terminal scrollback or creating response files. Only `shepherd` and `shepherd-governor` may call it, with a second authorization check inside the tool, and only for settled Herdr targets with a trusted `herdr:opencode` session mapping and an approved flock role.
+The `herdr_agent_response` OpenCode tool retrieves completed responses from Herdr-managed OpenCode workers without reading terminal scrollback or creating response files. Only `shepherd`, `shepherd-governor`, and `sheepdog` may call it, with a second role allowlist check inside the tool, and only for settled Herdr targets with a trusted `herdr:opencode` session mapping and an approved role. Each caller may retrieve only from its own workers: `shepherd` from `grazer`; `shepherd-governor` from `grazer` and `sheepdog`; `sheepdog` from `grazer`, `sheep`, `shearer-low`, and `shearer-medium`.
 
 Initial call:
 
@@ -427,7 +437,7 @@ npm run check
 npm test
 ```
 
-Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, and Git hook behavior on protected, worker, review, governance, and planning pushes.
+Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, orchestration state storage and access, and Git hook behavior on protected, worker, review, governance, and planning pushes.
 
 ## Releases
 
