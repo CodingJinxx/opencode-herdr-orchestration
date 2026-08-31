@@ -17,7 +17,7 @@ function runHook(cwd, mode, input) {
     cwd,
     encoding: "utf8",
     input,
-    env: { ...process.env, SHEPERD_MODE: mode },
+    env: { ...process.env, SHEPHERD_MODE: mode },
     windowsHide: true,
   });
 }
@@ -32,7 +32,7 @@ function repository(branch = "feature") {
   return { cwd, sha: git(cwd, "rev-parse", "HEAD") };
 }
 
-test("allows ordinary users and sheperd-build", () => {
+test("allows ordinary users and shepherd-build", () => {
   const { cwd, sha } = repository();
   const update = `refs/heads/feature ${sha} refs/heads/feature ${"0".repeat(40)}\n`;
   assert.equal(runHook(cwd, "none", update).status, 0);

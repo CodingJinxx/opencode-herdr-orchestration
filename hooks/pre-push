@@ -2,10 +2,10 @@
 
 set -eu
 
-mode=${SHEPERD_MODE:-none}
+mode=${SHEPHERD_MODE:-none}
 case "$mode" in
   sheep-build|sheep-plan|review)
-    echo "opencode-herdr-orchestration: $mode may not push; remote Git belongs to sheperd-build." >&2
+    echo "opencode-herdr-orchestration: $mode may not push; remote Git belongs to shepherd-build." >&2
     exit 1
     ;;
   plan)
@@ -17,7 +17,7 @@ esac
 
 current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 if [ -z "$current_branch" ]; then
-  echo "opencode-herdr-orchestration: sheperd-plan may not push from detached HEAD." >&2
+  echo "opencode-herdr-orchestration: shepherd-plan may not push from detached HEAD." >&2
   exit 1
 fi
 
@@ -32,7 +32,7 @@ is_protected() {
 }
 
 if is_protected "$current_branch"; then
-  echo "opencode-herdr-orchestration: sheperd-plan may not push protected branch $current_branch." >&2
+  echo "opencode-herdr-orchestration: shepherd-plan may not push protected branch $current_branch." >&2
   exit 1
 fi
 
@@ -41,20 +41,20 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   [ -n "${local_ref:-}" ] || continue
 
   if [ "$local_sha" = "$zero" ]; then
-    echo "opencode-herdr-orchestration: sheperd-plan may not delete remote refs." >&2
+    echo "opencode-herdr-orchestration: shepherd-plan may not delete remote refs." >&2
     exit 1
   fi
 
   expected_local="refs/heads/$current_branch"
   expected_remote="refs/heads/$current_branch"
   if [ "$local_ref" != "$expected_local" ] || [ "$remote_ref" != "$expected_remote" ]; then
-    echo "opencode-herdr-orchestration: sheperd-plan may push only $expected_local to the same remote branch." >&2
+    echo "opencode-herdr-orchestration: shepherd-plan may push only $expected_local to the same remote branch." >&2
     exit 1
   fi
 
   remote_branch=${remote_ref#refs/heads/}
   if is_protected "$remote_branch"; then
-    echo "opencode-herdr-orchestration: sheperd-plan may not update protected branch $remote_branch." >&2
+    echo "opencode-herdr-orchestration: shepherd-plan may not update protected branch $remote_branch." >&2
     exit 1
   fi
 done

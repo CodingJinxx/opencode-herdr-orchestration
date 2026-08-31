@@ -11,8 +11,8 @@ test("registers the closed agent topology", () => {
     "shearer-review-medium",
     "sheep-build",
     "sheep-plan",
-    "sheperd-build",
-    "sheperd-plan",
+    "shepherd-build",
+    "shepherd-plan",
   ]);
 });
 
@@ -24,12 +24,13 @@ test("pins reviewer variants to GPT-5.6 Terra", () => {
   assert.equal(agents["shearer-review-medium"].variant, "medium");
 });
 
-test("limits sheperd-plan and sheperd-build worker launches", () => {
+test("limits shepherd-plan and shepherd-build worker launches", () => {
   const agents = createAgents();
-  const planBash = agents["sheperd-plan"].permission.bash;
-  const buildBash = agents["sheperd-build"].permission.bash;
+  const planBash = agents["shepherd-plan"].permission.bash;
+  const buildBash = agents["shepherd-build"].permission.bash;
   assert.equal(planBash["herdr agent start * --kind opencode --pane * -- --agent sheep-plan"], "allow");
   assert.equal(planBash["herdr agent start * --kind opencode --pane * -- --agent sheep-build"], undefined);
+  assert.equal(agents["shepherd-plan"].permission.herdr_agent_response, "allow");
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent sheep-plan"], "allow");
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent sheep-build"], "allow");
   assert.equal(buildBash["herdr agent start * --kind opencode --pane * -- --agent shearer-review-low"], "allow");
@@ -41,14 +42,16 @@ test("keeps workers and reviewers as leaves with intended Git authority", () => 
   assert.equal(agents["sheep-plan"].permission.task, "deny");
   assert.equal(agents["sheep-plan"].permission.edit, "deny");
   assert.equal(agents["sheep-plan"].permission.bash["rg *"], undefined);
-  assert.equal(agents["sheep-plan"].permission.herdr_agent_response, undefined);
+  assert.equal(agents["sheep-plan"].permission.herdr_agent_response, "deny");
   assert.equal(agents["sheep-build"].permission.task, "deny");
   assert.equal(agents["sheep-build"].permission.bash["git push*"], "deny");
   assert.equal(agents["sheep-build"].permission.bash["git merge*"], "deny");
   assert.equal(agents["sheep-build"].permission.bash["git *;*"], "deny");
+  assert.equal(agents["sheep-build"].permission.herdr_agent_response, "deny");
   for (const name of ["shearer-review-low", "shearer-review-medium"]) {
     assert.equal(agents[name].permission.edit, "deny");
     assert.equal(agents[name].permission.task, "deny");
+    assert.equal(agents[name].permission.herdr_agent_response, "deny");
     assert.equal(agents[name].permission.bash["*"], "deny");
   }
 });
@@ -64,8 +67,8 @@ test("allows user overrides without dropping default permissions", () => {
 });
 
 test("maps agents to hook enforcement modes", () => {
-  assert.equal(modeForAgent("sheperd-plan"), "plan");
-  assert.equal(modeForAgent("sheperd-build"), "build");
+  assert.equal(modeForAgent("shepherd-plan"), "plan");
+  assert.equal(modeForAgent("shepherd-build"), "build");
   assert.equal(modeForAgent("sheep-plan"), "sheep-plan");
   assert.equal(modeForAgent("sheep-build"), "sheep-build");
   assert.equal(modeForAgent("shearer-review-medium"), "review");

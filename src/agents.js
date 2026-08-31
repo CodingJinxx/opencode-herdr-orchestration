@@ -1,8 +1,8 @@
 import {
   SHEEP_BUILD_PROMPT,
   SHEEP_PLAN_PROMPT,
-  SHEPERD_BUILD_PROMPT,
-  SHEPERD_PLAN_PROMPT,
+  SHEPHERD_BUILD_PROMPT,
+  SHEPHERD_PLAN_PROMPT,
   SHEARER_REVIEW_PROMPT,
 } from "./prompts.js";
 
@@ -79,15 +79,16 @@ export function createAgents(options = {}) {
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
 
   return {
-    "sheperd-plan": {
+    "shepherd-plan": {
       mode: "primary",
       description: "Researches and presents implementation-ready plans through sheep-plan workers without implementing them.",
-      prompt: SHEPERD_PLAN_PROMPT,
+      prompt: SHEPHERD_PLAN_PROMPT,
       permission: {
         grep: "allow",
         todowrite: "allow",
         edit: markdownOnly,
         apply_patch: markdownOnly,
+        herdr_agent_response: "allow",
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -124,14 +125,15 @@ export function createAgents(options = {}) {
       },
     },
 
-    "sheperd-build": {
+    "shepherd-build": {
       mode: "primary",
       description: "Executes approved plans through planning, implementation, and independent review workers.",
-      prompt: SHEPERD_BUILD_PROMPT,
+      prompt: SHEPHERD_BUILD_PROMPT,
       permission: {
         grep: "allow",
         edit: markdownOnly,
         apply_patch: markdownOnly,
+        herdr_agent_response: "allow",
         "ia-forge_deployment_status": "allow",
         "ia-forge_file_logs": "allow",
         "ia-forge_run_preset": "allow",
@@ -182,7 +184,7 @@ export function createAgents(options = {}) {
     "sheep-plan": {
       mode: "primary",
       model: workerModel,
-      description: "Performs read-only repository research for a sheperd.",
+      description: "Performs read-only repository research for a shepherd.",
       prompt: SHEEP_PLAN_PROMPT,
       permission: {
         read: "allow",
@@ -192,6 +194,7 @@ export function createAgents(options = {}) {
         todowrite: "allow",
         edit: "deny",
         apply_patch: "deny",
+        herdr_agent_response: "deny",
         bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
         task: "deny",
       },
@@ -200,10 +203,11 @@ export function createAgents(options = {}) {
     "sheep-build": {
       mode: "primary",
       model: workerModel,
-      description: "Implements a bounded task, verifies it, and hands a local commit to sheperd-build.",
+      description: "Implements a bounded task, verifies it, and hands a local commit to shepherd-build.",
       prompt: SHEEP_BUILD_PROMPT,
       permission: {
         grep: "allow",
+        herdr_agent_response: "deny",
         bash: {
           "*": "allow",
           "git push*": "deny",
@@ -246,6 +250,7 @@ function reviewerAgent(model, variant) {
       edit: "deny",
       apply_patch: "deny",
       todowrite: "deny",
+      herdr_agent_response: "deny",
       bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
       task: "deny",
     },

@@ -1,10 +1,11 @@
 import { createAgents, mergeAgent } from "./agents.js";
+import { createResponseTool } from "./response.js";
 
 const SESSION_MODES = new Map();
 
 function modeForAgent(agent) {
-  if (agent === "sheperd-plan") return "plan";
-  if (agent === "sheperd-build") return "build";
+  if (agent === "shepherd-plan") return "plan";
+  if (agent === "shepherd-build") return "build";
   if (agent === "shearer-review-low" || agent === "shearer-review-medium") return "review";
   if (agent === "sheep-plan") return "sheep-plan";
   if (agent === "sheep-build") return "sheep-build";
@@ -12,6 +13,9 @@ function modeForAgent(agent) {
 }
 
 export const HerdrOrchestrationPlugin = async (_input, options = {}) => ({
+  tool: {
+    herdr_agent_response: createResponseTool(options.response),
+  },
   config(config) {
     config.agent ??= {};
     const agents = createAgents(options);
@@ -25,7 +29,7 @@ export const HerdrOrchestrationPlugin = async (_input, options = {}) => ({
   },
 
   async "shell.env"(input, output) {
-    output.env.SHEPERD_MODE = input.sessionID
+    output.env.SHEPHERD_MODE = input.sessionID
       ? (SESSION_MODES.get(input.sessionID) ?? "none")
       : "none";
   },
