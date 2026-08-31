@@ -72,6 +72,21 @@ test("applies configured models by agent tier", async () => {
   assert.equal(config.agent["shearer-medium"].model, "custom/reviewer");
 });
 
+test("applies documented shepherd tuple options to the planning shepherd only", async () => {
+  const hooks = await plugin({}, {
+    shepherdPermissions: {
+      private_deployment_status: "allow",
+    },
+    shepherdPromptAppend: "Use private deployment tools according to local policy.",
+  });
+  const config = {};
+  hooks.config(config);
+  assert.equal(config.agent.shepherd.permission.private_deployment_status, "allow");
+  assert.match(config.agent.shepherd.prompt, /Use private deployment tools according to local policy\.$/);
+  assert.equal("private_deployment_status" in config.agent["shepherd-governor"].permission, false);
+  assert.doesNotMatch(config.agent["shepherd-governor"].prompt, /private deployment tools/);
+});
+
 test("omits worker variant by default and uses separate sheepdog default", async () => {
   const hooks = await plugin({}, {});
   const config = {};

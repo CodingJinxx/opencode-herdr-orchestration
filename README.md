@@ -370,17 +370,17 @@ Machine-specific governance permissions and instructions can also be added decla
     [
       "opencode-herdr-orchestration",
       {
-        "shepherdBuildPermissions": {
+        "shepherdPermissions": {
           "private_deployment_status": "allow"
         },
-        "shepherdBuildPromptAppend": "Use private deployment tools according to local policy."
+        "shepherdPromptAppend": "Use private deployment tools according to local policy."
       }
     ]
   ]
 }
 ```
 
-`shepherdBuildPermissions` is merged over the governance agent's permissions. `shepherdBuildPromptAppend` is appended as a separate final paragraph. Keep secrets out of plugin options because configuration may be displayed by diagnostics.
+`shepherdPermissions` is merged over the planning `shepherd` agent's permissions. `shepherdPromptAppend` is appended as a separate final paragraph to the `shepherd` agent's prompt. Keep secrets out of plugin options because configuration may be displayed by diagnostics.
 
 Machine- or organization-specific MCP tools, deployment rules, and private service instructions should stay in a local governance-agent override rather than this public package. Add only the private permissions and prompt additions required by your environment; unspecified package defaults remain intact through deep merging.
 
