@@ -6,6 +6,43 @@ This package registers the agents, provides complete structured worker-response 
 
 Requires Node.js 22.22.2 or newer when running the package CLI or tests.
 
+## Installation
+
+Add the published package to the global OpenCode configuration at `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-herdr-orchestration"]
+}
+```
+
+If `plugin` already contains entries, append `"opencode-herdr-orchestration"` instead of replacing them. OpenCode installs npm plugins automatically when it starts.
+
+Optionally install the shared Git push policy for all current and future repositories:
+
+```bash
+npx opencode-herdr-orchestration install-hooks
+```
+
+Then quit and restart OpenCode intentionally. Agent and plugin configuration is loaded only at process startup; installing the package does not restart or modify running OpenCode sessions.
+
+Confirm the installed agents:
+
+```bash
+opencode agent list
+```
+
+The expected package agents are `shepherd-plan`, `shepherd-build`, `sheep-plan`, `sheep-build`, `shearer-review-low`, and `shearer-review-medium`.
+
+### Migrating from standalone agent files
+
+Agent definitions are merged by agent name. A local file with the same name as a package agent overrides the corresponding package fields, including its prompt and permissions.
+
+Before switching completely, archive or remove standalone files named `sheep-plan.md`, `sheep-build.md`, `shepherd-plan.md`, or `shepherd-build.md` after any existing OpenCode processes that depend on them have ended. Older misspelled files such as `sheperd-plan.md` and `sheperd-build.md` do not override the correctly named package agents; they load as additional legacy agents until removed.
+
+Do not remove agent files merely to affect an already-running process. Complete or stop that process first, update the files, then start a new OpenCode process and verify the effective agent list.
+
 ## Architecture
 
 ```text
@@ -30,7 +67,7 @@ shepherd-build
 
 The build shepherd chooses low review for localized mechanical changes with strong deterministic coverage. It chooses medium review for security, architecture, migrations, public APIs, deployment, concurrency, cross-component work, weak coverage, or material uncertainty.
 
-## Install the plugin
+## Plugin configuration
 
 During local development, reference the source directly in the global OpenCode configuration:
 
@@ -43,7 +80,7 @@ During local development, reference the source directly in the global OpenCode c
 }
 ```
 
-After publishing, use the package name instead:
+For the published package, use:
 
 ```jsonc
 {
@@ -69,7 +106,7 @@ Plugin tuple options can override model defaults:
 
 Local agent definitions with the same names are merged over plugin defaults. This permits deliberate user customization without losing unspecified plugin permissions or prompts.
 
-During migration, existing files such as `~/.config/opencode/agents/shepherd-build.md` continue to override the plugin prompt. Keep them while existing sessions depend on them. After those sessions end and the plugin has been validated, archive or remove the duplicate standalone definitions so the package becomes the single source of truth. Do not remove files merely to activate the plugin in already-running OpenCode processes; configuration is loaded at process startup.
+Machine- or organization-specific MCP tools, deployment rules, and private service instructions should stay in a local `shepherd-build` override rather than this public package. Add only the private permissions and prompt additions required by your environment; unspecified package defaults remain intact through deep merging.
 
 OpenCode loads plugins and agent definitions at startup. Restart OpenCode when intentionally enabling or updating the plugin. The installer never stops or restarts an OpenCode process.
 

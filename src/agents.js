@@ -134,11 +134,6 @@ export function createAgents(options = {}) {
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
-        "ia-forge_deployment_status": "allow",
-        "ia-forge_file_logs": "allow",
-        "ia-forge_run_preset": "allow",
-        "ia-forge_service_control": "allow",
-        "ia-forge_service_logs": "allow",
         bash: {
           "*": "deny",
           ...herdrInspection,
