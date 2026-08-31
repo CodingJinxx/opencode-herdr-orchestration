@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 
-import { createAgents, mergeAgent } from "../src/agents.js";
-import { modeForAgent } from "../src/index.js";
+import { createAgents, mergeAgent, STATE_TOOL_ACCESS } from "../src/agents.js";
+import { createStateTools, modeForAgent } from "../src/index.js";
 import { SHEEPDOG_PROMPT, SHEEP_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEPHERD_PROMPT } from "../src/prompts.js";
 
 const OLD_ROLES = [
@@ -75,6 +76,51 @@ test("applies the approved response retrieval matrix to tool permissions", () =>
   }
   for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
     assert.equal(agents[name].permission.herdr_agent_response, "deny");
+  }
+});
+
+test("applies the approved state tool matrix to agent permissions", () => {
+  const agents = createAgents();
+
+  for (const name of ["shepherd", "shepherd-governor"]) {
+    const permission = agents[name].permission;
+    assert.equal(permission.herdr_plan_write, "allow", `${name} may write plans`);
+    assert.equal(permission.herdr_plan_read, "allow", `${name} may read plans`);
+    assert.equal(permission.herdr_execution_write, "deny", `${name} may not write executions`);
+    assert.equal(permission.herdr_execution_read, "deny", `${name} may not read executions`);
+  }
+
+  const sheepdog = agents.sheepdog.permission;
+  assert.equal(sheepdog.herdr_execution_write, "allow", "sheepdog may write executions");
+  assert.equal(sheepdog.herdr_execution_read, "allow", "sheepdog may read executions");
+  assert.equal(sheepdog.herdr_plan_write, "deny", "sheepdog may not write plans");
+  assert.equal(sheepdog.herdr_plan_read, "deny", "sheepdog may not read plans");
+
+  for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    for (const tool of [
+      "herdr_plan_write",
+      "herdr_plan_read",
+      "herdr_execution_write",
+      "herdr_execution_read",
+    ]) {
+      assert.equal(agents[name].permission[tool], "deny", `${name} may not use ${tool}`);
+    }
+  }
+});
+
+test("exposes the same state tool names to agents and plugin enforcement", async () => {
+  const { createStateTools } = await import("../src/index.js");
+  const tools = createStateTools({ cwd: tmpdir() });
+  assert.deepEqual([...STATE_TOOL_ACCESS.keys()].sort(), [
+    "herdr_execution_read",
+    "herdr_execution_write",
+    "herdr_plan_read",
+    "herdr_plan_write",
+  ]);
+  for (const [name, allowed] of STATE_TOOL_ACCESS) {    assert.ok(tools[name], `plugin registers ${name}`);
+    for (const agent of allowed) {
+      assert.equal(createAgents()[agent].permission[name], "allow", `${agent} is allowed ${name}`);
+    }
   }
 });
 

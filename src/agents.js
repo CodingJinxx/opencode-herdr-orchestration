@@ -67,6 +67,37 @@ const markdownOnly = {
   "**/*.md": "allow",
 };
 
+// Constrained orchestration state tools. The shepherd phases author and read
+// plan artifacts; the flock's squad lead records and reads execution artifacts.
+// This matrix is the single source of truth for both the plugin-level tool
+// enforcement (src/index.js) and the per-agent permission entries below.
+export const STATE_TOOLS = Object.freeze({
+  planWrite: "herdr_plan_write",
+  planRead: "herdr_plan_read",
+  executionWrite: "herdr_execution_write",
+  executionRead: "herdr_execution_read",
+});
+
+export const STATE_TOOL_ACCESS = Object.freeze(
+  new Map([
+    [STATE_TOOLS.planWrite, new Set(["shepherd", "shepherd-governor"])],
+    [STATE_TOOLS.planRead, new Set(["shepherd", "shepherd-governor"])],
+    [STATE_TOOLS.executionWrite, new Set(["sheepdog"])],
+    [STATE_TOOLS.executionRead, new Set(["sheepdog"])],
+  ]),
+);
+
+const ALL_STATE_TOOLS = Object.freeze(Object.values(STATE_TOOLS));
+
+function stateToolPermissions(allowedTools) {
+  return Object.fromEntries(
+    ALL_STATE_TOOLS.map((name) => [name, allowedTools.includes(name) ? "allow" : "deny"]),
+  );
+}
+
+const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
+const SHEEPDOG_STATE_TOOLS = [STATE_TOOLS.executionWrite, STATE_TOOLS.executionRead];
+
 const SHEPHERD_SPAWNABLE_AGENTS = ["grazer"];
 const GOVERNOR_SPAWNABLE_AGENTS = ["grazer", "sheepdog"];
 const SHEEPDOG_SPAWNABLE_AGENTS = ["grazer", "sheep", "shearer-low", "shearer-medium"];
@@ -178,6 +209,7 @@ export function createAgents(options = {}) {
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
+        ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -218,6 +250,7 @@ export function createAgents(options = {}) {
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
+        ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -273,6 +306,7 @@ export function createAgents(options = {}) {
         edit: "deny",
         apply_patch: "deny",
         herdr_agent_response: "allow",
+        ...stateToolPermissions(SHEEPDOG_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...safeGitInspection,
@@ -301,6 +335,7 @@ export function createAgents(options = {}) {
         edit: "deny",
         apply_patch: "deny",
         herdr_agent_response: "deny",
+        ...stateToolPermissions([]),
         bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
         task: "deny",
       },
@@ -316,6 +351,7 @@ export function createAgents(options = {}) {
       permission: {
         grep: "allow",
         herdr_agent_response: "deny",
+        ...stateToolPermissions([]),
         bash: {
           "*": "allow",
           ...SHEEP_DENIALS,
@@ -354,6 +390,7 @@ function reviewerAgent(model, variant) {
       apply_patch: "deny",
       todowrite: "deny",
       herdr_agent_response: "deny",
+      ...stateToolPermissions([]),
       bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
       task: "deny",
     },

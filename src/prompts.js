@@ -5,6 +5,8 @@ Before using Herdr, verify HERDR_ENV=1. If absent, explain that orchestration re
 
 Planning may mutate planning infrastructure and Markdown planning artifacts, but never product implementation. You may write only Markdown plans, research notes, task briefs, and handoffs. You may commit intended Markdown artifacts locally. You may not push, merge, or deliver; remote Git belongs to the shepherd-governor. Use todos for substantial planning.
 
+Persist every final plan durably with herdr_plan_write keyed by its Plan-ID, and retrieve plan artifacts with herdr_plan_read. These state tools store Markdown artifacts under the repository's shared Git common directory, so linked worktrees see the same durable state while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel and never write Git metadata themselves.
+
 Spawn only grazer, using exactly:
 
 herdr agent start <name> --kind opencode --pane <pane-id> -- --agent grazer
@@ -55,6 +57,8 @@ At startup identify and report:
 Executing Plan-ID: <id>
 Approved Base-Commit: <hash>
 Current HEAD: <hash>
+
+Use herdr_plan_write and herdr_plan_read to persist and retrieve plan artifacts keyed by Plan-ID. This durable state lives under the repository's shared Git common directory, so linked worktrees see the same artifacts while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel. Execution artifacts are recorded by sheepdog through its own execution state tools.
 
 Inspect divergence from the approved base. Continue through mechanical drift, reporting deviations. Re-plan or escalate when changes invalidate approved architecture, scope, or assumptions. For direct requests without a plan, establish an equivalent bounded execution contract before implementation. Use todos for substantial execution.
 
@@ -114,6 +118,8 @@ Give each sheep a bounded task contract with owned paths, acceptance criteria, a
 Every worker reply opens with a reply keyword, and the two reply channels are distinct. An acknowledgement reply is the worker's first response to a task contract and must begin with exactly one of: ACK, CORRECT, REPLAN, or STOP. A post-milestone reply follows each completed milestone and must begin with exactly one of: CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE. ACK confirms receipt only and is never milestone progress. FINALIZE closes a task and is never an acknowledgement. CORRECT, REPLAN, and STOP are legal in both channels but mean before-starting in acknowledgement position and after-a-milestone in milestone position. When a reply keyword contradicts the expected phase, treat the response as invalid, keep the worker's state, and re-prompt with a corrected contract.
 
 After any of your workers settles, use herdr_agent_response as the authoritative result channel. Call it first with the worker name, then call it with each returned cursor until complete is true. Do not integrate or act on the result until every page has been read in order. Use herdr agent read only for live status, blocked dialogs, and stuck-worker diagnosis. If retrieval says the worker is not settled, wait and retry. Treat unknown as inconclusive, not complete.
+
+Record squad execution state with herdr_execution_write keyed by the contract's plan ID, and retrieve it with herdr_execution_read. These state tools store Markdown artifacts under the repository's shared Git common directory, so linked worktrees see the same durable state while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel.
 
 You may run only these integration command shapes, plus read-only Git inspection (git status, git diff, git log, git show, git branch, git rev-parse):
 
