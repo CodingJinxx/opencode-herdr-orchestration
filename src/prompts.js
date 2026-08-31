@@ -58,7 +58,7 @@ Executing Plan-ID: <id>
 Approved Base-Commit: <hash>
 Current HEAD: <hash>
 
-Use herdr_plan_write and herdr_plan_read to persist and retrieve plan artifacts keyed by Plan-ID. This durable state lives under the repository's shared Git common directory, so linked worktrees see the same artifacts while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel. Execution artifacts are recorded by sheepdog through its own execution state tools.
+Use herdr_plan_write and herdr_plan_read to persist and retrieve plan artifacts keyed by Plan-ID. This durable state lives under the repository's shared Git common directory, so linked worktrees see the same artifacts while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel. Sheepdog reads the authoritative plan directly with herdr_plan_read before acknowledging its contract and records execution artifacts through its own execution state tools.
 
 Inspect divergence from the approved base. Continue through mechanical drift, reporting deviations. Re-plan or escalate when changes invalidate approved architecture, scope, or assumptions. For direct requests without a plan, establish an equivalent bounded execution contract before implementation. Use todos for substantial execution.
 
@@ -119,7 +119,7 @@ Every worker reply opens with a reply keyword, and the two reply channels are di
 
 After any of your workers settles, use herdr_agent_response as the authoritative result channel. Call it first with the worker name, then call it with each returned cursor until complete is true. Do not integrate or act on the result until every page has been read in order. Use herdr agent read only for live status, blocked dialogs, and stuck-worker diagnosis. If retrieval says the worker is not settled, wait and retry. Treat unknown as inconclusive, not complete.
 
-Record squad execution state with herdr_execution_write keyed by the contract's plan ID, and retrieve it with herdr_execution_read. These state tools store Markdown artifacts under the repository's shared Git common directory, so linked worktrees see the same durable state while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel.
+Record squad execution state with herdr_execution_write keyed by the contract's plan ID, and retrieve it with herdr_execution_read. Before acknowledging any task contract, read the authoritative plan directly with herdr_plan_read using the contract's plan ID; never rely on a secondhand summary of the plan, and REPLAN when the contract contradicts what the plan artifact says. These state tools store Markdown artifacts under the repository's shared Git common directory, so linked worktrees see the same durable state while separate clones never do. Never record orchestration state through arbitrary Git metadata such as notes, refs, or config; the state tools are the only sanctioned channel.
 
 You may run only these integration command shapes, plus read-only Git inspection (git status, git diff, git log, git show, git branch, git rev-parse):
 

@@ -67,10 +67,11 @@ const markdownOnly = {
   "**/*.md": "allow",
 };
 
-// Constrained orchestration state tools. The shepherd phases author and read
-// plan artifacts; the flock's squad lead records and reads execution artifacts.
-// This matrix is the single source of truth for both the plugin-level tool
-// enforcement (src/index.js) and the per-agent permission entries below.
+// Constrained orchestration state tools. The shepherd phases author plan
+// artifacts; sheepdog reads the authoritative plan and records and reads
+// execution artifacts. This matrix is the single source of truth for both the
+// plugin-level tool enforcement (src/index.js) and the per-agent permission
+// entries below.
 export const STATE_TOOLS = Object.freeze({
   planWrite: "herdr_plan_write",
   planRead: "herdr_plan_read",
@@ -81,7 +82,7 @@ export const STATE_TOOLS = Object.freeze({
 export const STATE_TOOL_ACCESS = Object.freeze(
   new Map([
     [STATE_TOOLS.planWrite, new Set(["shepherd", "shepherd-governor"])],
-    [STATE_TOOLS.planRead, new Set(["shepherd", "shepherd-governor"])],
+    [STATE_TOOLS.planRead, new Set(["shepherd", "shepherd-governor", "sheepdog"])],
     [STATE_TOOLS.executionWrite, new Set(["sheepdog"])],
     [STATE_TOOLS.executionRead, new Set(["sheepdog"])],
   ]),
@@ -96,7 +97,11 @@ function stateToolPermissions(allowedTools) {
 }
 
 const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
-const SHEEPDOG_STATE_TOOLS = [STATE_TOOLS.executionWrite, STATE_TOOLS.executionRead];
+const SHEEPDOG_STATE_TOOLS = [
+  STATE_TOOLS.planRead,
+  STATE_TOOLS.executionWrite,
+  STATE_TOOLS.executionRead,
+];
 
 const SHEPHERD_SPAWNABLE_AGENTS = ["grazer"];
 const GOVERNOR_SPAWNABLE_AGENTS = ["grazer", "sheepdog"];

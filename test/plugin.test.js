@@ -226,9 +226,14 @@ test("grants plan state tools to the shepherd phases and execution state tools t
   const governorRead = await execute(STATE_TOOLS.planRead, "shepherd-governor", { planId: "flock-plan-01" });
   assert.equal(governorRead.ok, true);
 
-  const deniedPlan = await execute(STATE_TOOLS.planRead, "sheepdog", { planId: "flock-plan-01" });
-  assert.equal(deniedPlan.ok, false);
-  assert.equal(deniedPlan.error.code, "UNAUTHORIZED_AGENT");
+  const sheepdogPlanRead = await execute(STATE_TOOLS.planRead, "sheepdog", { planId: "flock-plan-01" });
+  assert.equal(sheepdogPlanRead.ok, true, "sheepdog reads the authoritative plan directly");
+  const deniedPlanWrite = await execute(STATE_TOOLS.planWrite, "sheepdog", {
+    planId: "flock-plan-03",
+    markdown: "# Sheepdog may not author plans\n",
+  });
+  assert.equal(deniedPlanWrite.ok, false);
+  assert.equal(deniedPlanWrite.error.code, "UNAUTHORIZED_AGENT");
 
   const execution = await execute(STATE_TOOLS.executionWrite, "sheepdog", {
     planId: "flock-plan-01",

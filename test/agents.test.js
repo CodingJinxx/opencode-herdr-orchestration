@@ -91,10 +91,10 @@ test("applies the approved state tool matrix to agent permissions", () => {
   }
 
   const sheepdog = agents.sheepdog.permission;
+  assert.equal(sheepdog.herdr_plan_read, "allow", "sheepdog may read the authoritative plan");
   assert.equal(sheepdog.herdr_execution_write, "allow", "sheepdog may write executions");
   assert.equal(sheepdog.herdr_execution_read, "allow", "sheepdog may read executions");
   assert.equal(sheepdog.herdr_plan_write, "deny", "sheepdog may not write plans");
-  assert.equal(sheepdog.herdr_plan_read, "deny", "sheepdog may not read plans");
 
   for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
     for (const tool of [
@@ -301,6 +301,9 @@ test("preserves critical orchestration behavior in the tiered prompts", () => {
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /You are not a reviewer/);
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /dedicated branches and worktrees/);
   assert.match(SHEEPDOG_PROMPT, /own prepared branch and worktree with non-overlapping ownership/);
+  assert.match(SHEEPDOG_PROMPT, /read the authoritative plan directly with herdr_plan_read/);
+  assert.match(SHEEPDOG_PROMPT, /Before acknowledging any task contract/);
+  assert.match(SHEEPDOG_PROMPT, /never rely on a secondhand summary of the plan/);
 });
 
 test("prompt spawn lists mirror the approved spawn matrix", () => {

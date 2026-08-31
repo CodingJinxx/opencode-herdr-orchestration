@@ -22,11 +22,12 @@ function stateError(code, message, retryable = false) {
 
 // Exposes the constrained orchestration state API (src/state.js) as plugin
 // tools. Enforcement mirrors STATE_TOOL_ACCESS in src/agents.js: shepherd and
-// shepherd-governor may write and read plan artifacts; sheepdog may write and
-// read execution artifacts. Artifacts are durable Markdown files under the
-// repository's shared Git common directory, so linked worktrees share state
-// while separate clones never do. The state service invokes only read-only
-// `git rev-parse`; it never writes arbitrary Git metadata.
+// shepherd-governor may write and read plan artifacts; sheepdog reads the
+// authoritative plan and writes and reads execution artifacts. Artifacts are
+// durable Markdown files under the repository's shared Git common directory,
+// so linked worktrees share state while separate clones never do. The state
+// service invokes only read-only `git rev-parse`; it never writes arbitrary
+// Git metadata.
 export function createStateTools(stateOptions = {}) {
   const state = createStateService(stateOptions);
 
@@ -41,7 +42,7 @@ export function createStateTools(stateOptions = {}) {
     {
       name: STATE_TOOLS.planRead,
       description:
-        "Read a stored plan Markdown artifact by plan ID. Shepherd and shepherd-governor only.",
+        "Read a stored plan Markdown artifact by plan ID. Shepherd, shepherd-governor, and sheepdog only.",
       write: false,
       run: (args) => state.readPlan(args.planId),
     },
