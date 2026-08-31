@@ -41,12 +41,17 @@ jobs:
           set -euo pipefail
           name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
-          published_sha="$(npm view "$name@$version" dist.gitHead --json 2>/dev/null | tr -d '"' || true)"
-          if [ -n "$published_sha" ]; then
+          if published_sha="$(npm view "$name@$version" dist.gitHead 2>/dev/null)"; then
             test "$published_sha" = "$GITHUB_SHA"
             echo "Version $version is already published from this commit; continuing."
           else
-            npm publish --access public --provenance
+            lookup_error="$(npm view "$name@$version" dist.gitHead 2>&1 >/dev/null || true)"
+            if printf '%s\n' "$lookup_error" | grep -q 'E404'; then
+              npm publish --access public --provenance
+            else
+              printf '%s\n' "$lookup_error" >&2
+              exit 1
+            fi
           fi
       - name: Create GitHub release
         env:
