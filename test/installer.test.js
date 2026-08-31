@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parse } from "jsonc-parser";
+
+import { backupFile, isOrchestrationPlugin, packageEntry, restoreBackup, updatePluginConfig } from "../src/installer.js";
 
 const cli = resolve("bin/orchestration.js");
 
@@ -42,12 +45,67 @@ test("installs, reports, and cleanly uninstalls the global hook", () => {
 
   const status = run(home, "status");
   assert.equal(status.status, 0, status.stderr);
-  assert.equal(JSON.parse(status.stdout).active, true);
+  assert.equal(JSON.parse(status.stdout).hooks.active, true);
 
   const removed = run(home, "uninstall-hooks");
   assert.equal(removed.status, 0, removed.stderr);
   assert.equal(existsSync(hooksPath), false);
   assert.equal(run(home, "status").stdout.includes('"active": false'), true);
+});
+
+test("preserves JSONC comments, unrelated plugins, and tuple options", () => {
+  const source = `{
+  // Keep this comment.
+  "plugin": [
+    "other-plugin", // Keep this plugin comment.
+    ["opencode-herdr-orchestration@0.1.0", { "private": true }],
+  ],
+}
+`;
+  const entry = "file:///home/user/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const updated = updatePluginConfig(source, entry);
+  assert.match(updated, /Keep this comment/);
+  assert.match(updated, /Keep this plugin comment/);
+  const parsed = parse(updated, [], { allowTrailingComma: true });
+  assert.equal(parsed.plugin[0], "other-plugin");
+  assert.deepEqual(parsed.plugin[1], [entry, { private: true }]);
+});
+
+test("adds, removes, and deduplicates only orchestration registrations", () => {
+  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const added = updatePluginConfig("{\n  \"plugin\": [\"other\"]\n}\n", entry);
+  assert.deepEqual(parse(added).plugin, ["other", entry]);
+
+  const duplicate = JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", [entry, { keep: true }]] });
+  const deduplicated = updatePluginConfig(duplicate, entry);
+  assert.deepEqual(parse(deduplicated).plugin, ["other", entry]);
+  assert.deepEqual(parse(updatePluginConfig(deduplicated, entry, true)).plugin, ["other"]);
+});
+
+test("creates portable file URLs and recognizes package registrations", () => {
+  const entry = packageEntry(process.platform === "win32" ? "C:\\Users\\Test\\.config\\opencode" : "/home/test/.config/opencode");
+  assert.match(entry, /^file:\/\//);
+  assert.equal(isOrchestrationPlugin(entry), true);
+  assert.equal(isOrchestrationPlugin(["opencode-herdr-orchestration@1.2.3", {}]), true);
+  assert.equal(isOrchestrationPlugin("unrelated"), false);
+});
+
+test("restores a config backup after failed validation", () => {
+  const home = mkdtempSync(join(tmpdir(), "orchestration-rollback-"));
+  const file = join(home, "opencode.jsonc");
+  writeFileSync(file, "original", "utf8");
+  const backup = backupFile(file, new Date("2026-01-01T00:00:00Z"));
+  writeFileSync(file, "broken", "utf8");
+  restoreBackup(file, backup);
+  assert.equal(readFileSync(file, "utf8"), "original");
+});
+
+test("removes a first-time config after failed validation", () => {
+  const home = mkdtempSync(join(tmpdir(), "orchestration-rollback-"));
+  const file = join(home, "opencode.jsonc");
+  writeFileSync(file, "broken", "utf8");
+  restoreBackup(file, null, false);
+  assert.equal(existsSync(file), false);
 });
 
 test("refuses to replace an existing hooks path without force", () => {

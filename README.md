@@ -8,6 +8,41 @@ Requires Node.js 22.22.2 or newer when running the package CLI or tests.
 
 ## Installation
 
+Install or update the plugin with the cross-platform npm CLI:
+
+```bash
+npx -y opencode-herdr-orchestration@latest install
+npx -y opencode-herdr-orchestration@latest update
+```
+
+The installer:
+
+- locates the global OpenCode config directory;
+- installs an exact package version there;
+- preserves existing JSONC comments, trailing commas, plugins, and tuple options;
+- adds the stable file URL required by current OpenCode npm plugin loading;
+- creates timestamped backups of changed config and npm manifest files;
+- validates `shepherd-build` through a short-lived OpenCode debug process;
+- never restarts or signals a running OpenCode process.
+
+The shared Git push policy remains opt-in:
+
+```bash
+npx -y opencode-herdr-orchestration@latest install --with-hooks
+```
+
+Inspect or remove the installation:
+
+```bash
+npx -y opencode-herdr-orchestration@latest status
+npx -y opencode-herdr-orchestration@latest uninstall
+npx -y opencode-herdr-orchestration@latest uninstall --with-hooks
+```
+
+After installation or update, quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration.
+
+## Manual Installation
+
 Add the published package to the global OpenCode configuration at `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc`:
 
 ```jsonc
@@ -18,6 +53,23 @@ Add the published package to the global OpenCode configuration at `~/.config/ope
 ```
 
 If `plugin` already contains entries, append `"opencode-herdr-orchestration"` instead of replacing them. OpenCode installs npm plugins automatically when it starts.
+
+Install the package into that config directory so the stable file URL can resolve it:
+
+```bash
+cd ~/.config/opencode
+npm install --save-exact opencode-herdr-orchestration@latest
+```
+
+Current OpenCode releases may record but not execute npm plugins referenced only by package name. If that occurs, use the installed entry path in the plugin tuple instead:
+
+```jsonc
+{
+  "plugin": [
+    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js"
+  ]
+}
+```
 
 Optionally install the shared Git push policy for all current and future repositories:
 
