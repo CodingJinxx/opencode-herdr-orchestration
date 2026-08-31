@@ -71,6 +71,8 @@ Acknowledgement and progress are intentionally different mechanisms:
 
 Milestones never imply acknowledgement, and acknowledgement never auto-advances a milestone. Governance-phase startup reports the plan ID, approved base, and current HEAD, then inspects divergence from the approved base before delegating.
 
+Before acknowledging any task contract, the sheepdog reads the authoritative plan artifact itself with `herdr_plan_read` using the contract's plan ID — never a secondhand summary — and replans when the contract contradicts what the plan artifact says.
+
 Final plans carry:
 
 ```text
@@ -120,7 +122,7 @@ The governor prepares each parallel `sheep` worker a dedicated branch and worktr
 
 All durable orchestration state lives outside agent memory and plugin process state, in two places:
 
-- **The constrained orchestration state API.** Four plugin tools store and retrieve Markdown artifacts with JSON frontmatter under the repository's shared Git common directory: `herdr_plan_write` and `herdr_plan_read` for plan artifacts (shepherd and shepherd-governor), and `herdr_execution_write` and `herdr_execution_read` for execution artifacts (sheepdog). Artifacts live at `<git-common-dir>/herdr/plans/<planId>.md` and `<git-common-dir>/herdr/executions/<planId>.md`. Writes are atomic; the service invokes only read-only `git rev-parse`; Markdown bodies are capped at 1 MiB; plan IDs are 1–64 characters of letters, digits, dot, underscore, or hyphen.
+- **The constrained orchestration state API.** Four plugin tools store and retrieve Markdown artifacts with JSON frontmatter under the repository's shared Git common directory: `herdr_plan_write` for plan artifacts (shepherd and shepherd-governor), `herdr_plan_read` for plan artifacts (shepherd, shepherd-governor, and sheepdog), and `herdr_execution_write` and `herdr_execution_read` for execution artifacts (sheepdog). Sheepdog may read the authoritative plan but never write one; plan authorship stays with the shepherd phases. Artifacts live at `<git-common-dir>/herdr/plans/<planId>.md` and `<git-common-dir>/herdr/executions/<planId>.md`. Writes are atomic; the service invokes only read-only `git rev-parse`; Markdown bodies are capped at 1 MiB; plan IDs are 1–64 characters of letters, digits, dot, underscore, or hyphen.
 - **Git history.** Shepherd-phase agents may commit intended Markdown planning artifacts locally, and worker output is a verified local commit; progress is Git history, reviewable and revertable.
 
 Every worktree the governor creates — including worktrees created from other worktrees — is a **peer that shares the same Git common repository**, never a nested checkout. Because the state API stores artifacts under the common directory, a plan written in one worktree governs workers in all of them, and orchestration state survives session ends, process restarts, and machine reboots. Separate clones never share this state.
