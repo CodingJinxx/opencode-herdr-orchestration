@@ -43,7 +43,7 @@ npx -y opencode-herdr-orchestration@latest uninstall --with-hooks
 
 After installation or update, quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration.
 
-`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`.
+`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`. The sheep worker reasoning effort accepts the provider's variant names, such as `low`, `medium`, or `high`; leaving it unset uses the model's default reasoning behavior. Shepherd agents always inherit the active model and its reasoning behavior, and reviewer reasoning stays fixed at `low` and `medium`.
 
 ## Manual Installation
 
@@ -154,6 +154,7 @@ Plugin tuple options can override model defaults:
       {
         "shepherdModel": "anthropic/claude-sonnet-4-6",
         "workerModel": "litellm/glm-5.3-flash",
+        "workerVariant": "medium",
         "reviewerModel": "litellm-responses/gpt-5.6-terra"
       }
     ]

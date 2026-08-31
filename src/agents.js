@@ -83,6 +83,7 @@ export function mergeAgent(defaults, override) {
 export function createAgents(options = {}) {
   const shepherdModel = options.shepherdModel;
   const workerModel = options.workerModel ?? "litellm/glm-5.3-flash";
+  const workerVariant = options.workerVariant;
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
   const shepherdBuildPermissions = options.shepherdBuildPermissions ?? {};
   const shepherdBuildPrompt = appendPrompt(SHEPHERD_BUILD_PROMPT, options.shepherdBuildPromptAppend);
@@ -191,6 +192,7 @@ export function createAgents(options = {}) {
     "sheep-plan": {
       mode: "primary",
       model: workerModel,
+      ...(workerVariant ? { variant: workerVariant } : {}),
       description: "Performs read-only repository research for a shepherd.",
       prompt: SHEEP_PLAN_PROMPT,
       permission: {
@@ -210,6 +212,7 @@ export function createAgents(options = {}) {
     "sheep-build": {
       mode: "primary",
       model: workerModel,
+      ...(workerVariant ? { variant: workerVariant } : {}),
       description: "Implements a bounded task, verifies it, and hands a local commit to shepherd-build.",
       prompt: SHEEP_BUILD_PROMPT,
       permission: {

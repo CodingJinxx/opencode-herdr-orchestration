@@ -28,9 +28,10 @@ const installedHook = join(hooksPath, "pre-push");
 const [command, ...flags] = process.argv.slice(2);
 
 const MODEL_ROLES = [
-  ["shepherdModel", "Shepherd agents", "OpenCode active model"],
-  ["workerModel", "Sheep worker agents", "litellm/glm-5.3-flash"],
-  ["reviewerModel", "Shearer review agents", "litellm-responses/gpt-5.6-terra"],
+  ["shepherdModel", "Shepherd agents", "OpenCode active model", "model"],
+  ["workerModel", "Sheep worker agents", "litellm/glm-5.3-flash", "model"],
+  ["workerVariant", "Sheep worker reasoning effort", "model default", "variant"],
+  ["reviewerModel", "Shearer review agents", "litellm-responses/gpt-5.6-terra", "model"],
 ];
 
 function git(args, options = {}) {
@@ -82,11 +83,13 @@ async function promptForModels(configDir) {
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   process.stdout.write("Configure agent models. Press Enter to keep the shown value; enter - to restore the package default.\n");
   try {
-    for (const [key, label, packageDefault] of MODEL_ROLES) {
+    for (const [key, label, packageDefault, kind] of MODEL_ROLES) {
       const shown = existing[key] || packageDefault;
       const answer = (await prompt.question(`${label} [${shown}]: `)).trim();
       const value = answer === "-" ? "" : (answer || existing[key] || "");
-      if (value && !value.includes("/")) throw new Error(`${label} model must include a provider prefix, for example provider/model.`);
+      if (value && kind === "model" && !value.includes("/")) {
+        throw new Error(`${label} model must include a provider prefix, for example provider/model.`);
+      }
       answers[key] = value;
     }
   } finally {

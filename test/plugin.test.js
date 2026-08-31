@@ -35,6 +35,7 @@ test("applies configured models by agent role", async () => {
   const hooks = await plugin({}, {
     shepherdModel: "custom/shepherd",
     workerModel: "custom/worker",
+    workerVariant: "high",
     reviewerModel: "custom/reviewer",
   });
   const config = {};
@@ -42,9 +43,21 @@ test("applies configured models by agent role", async () => {
   assert.equal(config.agent["shepherd-plan"].model, "custom/shepherd");
   assert.equal(config.agent["shepherd-build"].model, "custom/shepherd");
   assert.equal(config.agent["sheep-plan"].model, "custom/worker");
+  assert.equal(config.agent["sheep-plan"].variant, "high");
   assert.equal(config.agent["sheep-build"].model, "custom/worker");
+  assert.equal(config.agent["sheep-build"].variant, "high");
   assert.equal(config.agent["shearer-review-low"].model, "custom/reviewer");
   assert.equal(config.agent["shearer-review-medium"].model, "custom/reviewer");
+});
+
+test("omits worker variant by default", async () => {
+  const hooks = await plugin({}, {});
+  const config = {};
+  hooks.config(config);
+  assert.equal("variant" in config.agent["sheep-plan"], false);
+  assert.equal("variant" in config.agent["sheep-build"], false);
+  assert.equal(config.agent["shearer-review-low"].variant, "low");
+  assert.equal(config.agent["shearer-review-medium"].variant, "medium");
 });
 
 test("custom response tool returns structured output and metadata", async () => {
