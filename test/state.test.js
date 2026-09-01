@@ -689,31 +689,33 @@ test("verifies lease ownership on release and preserves a lock taken over mid-op
   assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "lease-plan.md")), true, "the operation itself completed");
 });
 
-test("verifies the lease token on stale takeover and yields when another owner wins", async () => {
+test("a contender that loses the lease install race yields with a retryable busy result", async () => {
   const repo = repository();
   const lockPath = path.join(stateRoot(repo), ".migration-lock");
   fs.mkdirSync(stateRoot(repo), { recursive: true });
   fs.writeFileSync(
     lockPath,
-    JSON.stringify({ pid: 424242, token: "stale-owner", acquiredAt: "2020-01-01T00:00:00.000Z" }),
+    JSON.stringify({ pid: 424242, token: "stale-owner", generation: 0, acquiredAt: "2020-01-01T00:00:00.000Z" }),
     "utf8",
   );
-  let raced = false;
+  let installCalls = 0;
   const racingFs = new Proxy(fs, {
     get(target, key) {
-      if (key === "renameSync") {
+      if (key === "writeFileSync") {
         return (...args) => {
-          const result = Reflect.get(target, key)(...args);
-          // A concurrent owner's atomic takeover lands after ours.
-          if (!raced && args[1] === lockPath) {
-            raced = true;
-            fs.writeFileSync(
-              lockPath,
-              JSON.stringify({ pid: 31337, token: "winner-token", acquiredAt: FIXED_TIME.toISOString() }),
-              "utf8",
-            );
+          if (args[0] === lockPath && args[2]?.flag === "wx") {
+            installCalls += 1;
+            if (installCalls === 1) {
+              // A concurrent contender wins the atomic exclusive install first.
+              fs.writeFileSync(
+                lockPath,
+                JSON.stringify({ pid: 31337, token: "winner-token", generation: 1, acquiredAt: FIXED_TIME.toISOString() }),
+                "utf8",
+              );
+              throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+            }
           }
-          return result;
+          return Reflect.get(target, key)(...args);
         };
       }
       return Reflect.get(target, key);
@@ -728,6 +730,87 @@ test("verifies the lease token on stale takeover and yields when another owner w
   const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
   assert.equal(lock.token, "winner-token", "the verified winner's lease was not clobbered or deleted");
   assert.equal(lock.pid, 31337);
+  assert.equal(lock.generation, 1);
+});
+
+test("shared stale observation elects exactly one reconciliation owner", async () => {
+  const repo = repository();
+  const planId = "race-plan";
+  const legacyBytes = legacyArtifact(repo, "plan", planId, "# Race plan\n");
+  seedLegacy(repo, "plans", planId, legacyBytes);
+  const lockPath = path.join(stateRoot(repo), ".migration-lock");
+  const journalPath = path.join(stateRoot(repo), ".migration-journal");
+  const canonicalPlan = path.join(stateRoot(repo), "plans", `${planId}.md`);
+  fs.mkdirSync(stateRoot(repo), { recursive: true });
+  const staleLease = JSON.stringify({
+    pid: 424242,
+    token: "stale-owner",
+    generation: 0,
+    acquiredAt: "2020-01-01T00:00:00.000Z",
+  });
+  fs.writeFileSync(lockPath, staleLease, "utf8");
+
+  // Contender A observes the stale lease on disk, wins the CAS, reconciles,
+  // and keeps its verified lease installed because only its release rename
+  // is deferred — modelling an owner still holding the lease.
+  let ownerLease = null;
+  const fsA = new Proxy(fs, {
+    get(target, key) {
+      if (key === "writeFileSync") {
+        return (...args) => {
+          if (args[0] === lockPath && args[2]?.flag === "wx") {
+            ownerLease = JSON.parse(args[1]);
+          }
+          return Reflect.get(target, key)(...args);
+        };
+      }
+      if (key === "renameSync") {
+        return (...args) => {
+          if (String(args[1]).endsWith(".releasing")) {
+            return undefined; // Defer release: the owner's lease stays installed.
+          }
+          return Reflect.get(target, key)(...args);
+        };
+      }
+      return Reflect.get(target, key);
+    },
+  });
+  // Contender B is forced to observe the exact stale lease A observed (the
+  // shared stale observation of the defect), then competes: its CAS removal
+  // pulls A's active verified lease off the lock path, which cannot match the
+  // observed stale bytes, so B must restore A's lease and fail closed.
+  let bObserved = false;
+  const fsB = new Proxy(fs, {
+    get(target, key) {
+      if (key === "readFileSync") {
+        return (...args) => {
+          if (args[0] === lockPath && !bObserved) {
+            bObserved = true;
+            return staleLease;
+          }
+          return Reflect.get(target, key)(...args);
+        };
+      }
+      return Reflect.get(target, key);
+    },
+  });
+
+  const owner = await service({ cwd: repo.cwd, fs: fsA }).writePlan({ planId, markdown: "# From the owner\n" });
+  assert.equal(owner.ok, true, "exactly one contender becomes the reconciliation owner");
+  const loser = await service({ cwd: repo.cwd, fs: fsB }).writePlan({ planId, markdown: "# From the loser\n" });
+  assert.equal(loser.ok, false, "the loser performs no reconciliation");
+  assert.equal(loser.error.code, "MIGRATION_BUSY");
+  assert.equal(loser.error.retryable, true);
+
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  assert.deepEqual(lock, ownerLease, "the active owner's verified lease survived the loser's takeover attempt");
+  assert.equal(lock.token, ownerLease.token);
+  assert.equal(lock.generation, 1);
+  const canonicalText = fs.readFileSync(canonicalPlan, "utf8");
+  assert.ok(canonicalText.includes("# From the owner\n"), "only the owner's plan was written");
+  assert.equal(canonicalText.includes("# From the loser"), false, "the loser's markdown was never written");
+  assert.equal(fs.readFileSync(path.join(legacyStateRoot(repo), "plans", `${planId}.md`), "utf8"), legacyBytes, "the legacy source is preserved");
+  assert.equal(JSON.parse(fs.readFileSync(journalPath, "utf8")).length, 0, "the migration journal remains intact and settled");
 });
 
 test("reconciles an active legacy write as a conflict instead of last-writer-wins", async () => {

@@ -411,31 +411,46 @@ export function createStateService(options = {}) {
     } catch (cause) {
       return error("MIGRATION_LOCK_FAILED", `Unable to create the Flocky state root: ${processErrorDetail(cause)}`, true);
     }
-    // Every lease carries a unique owner token. Takeover is an atomic rename
-    // plus token verification, and release removes the lock only after
-    // verifying it still belongs to this owner — never an unverified
-    // overwrite of another process's lease.
+    // Generation-carrying exclusive lease. Takeover is a compare-and-swap on
+    // the observed lease bytes: a contender may only displace the exact stale
+    // lease it observed, so two contenders that share one stale observation
+    // can never both install a valid lease, and an active verified owner is
+    // never silently displaced. Ownership is a monotonic generation: every
+    // takeover installs generation + 1 through an atomic exclusive create,
+    // so at most one contender can win any given installation.
     const token = randomBytes(12).toString("hex");
-    const payload = JSON.stringify({
-      pid: process.pid,
-      token,
-      acquiredAt: resolveNow(now).toISOString(),
-    });
+    const payloadFor = (generation) =>
+      JSON.stringify({
+        pid: process.pid,
+        token,
+        generation,
+        acquiredAt: resolveNow(now).toISOString(),
+      });
     try {
-      fs.writeFileSync(paths.lockPath, payload, { encoding: "utf8", flag: "wx" });
-      return { ok: true, token };
+      fs.writeFileSync(paths.lockPath, payloadFor(0), { encoding: "utf8", flag: "wx" });
+      return { ok: true, token, generation: 0 };
     } catch (cause) {
       if (cause?.code !== "EEXIST") {
         return error("MIGRATION_LOCK_FAILED", `Unable to acquire the migration lock: ${processErrorDetail(cause)}`, true);
       }
     }
+    let observed;
+    try {
+      observed = fs.readFileSync(paths.lockPath, "utf8");
+    } catch (cause) {
+      if (cause?.code === "ENOENT") {
+        return error("MIGRATION_BUSY", "The migration lock disappeared while it was being observed; retry.", true);
+      }
+      return error("MIGRATION_LOCK_FAILED", `Unable to read the migration lock: ${processErrorDetail(cause)}`, true);
+    }
     let existing = null;
     try {
-      existing = JSON.parse(fs.readFileSync(paths.lockPath, "utf8"));
+      existing = JSON.parse(observed);
     } catch {
       existing = null;
     }
     const acquiredAt = Date.parse(existing?.acquiredAt ?? "");
+    const observedGeneration = Math.max(0, Number.isFinite(existing?.generation) ? existing.generation : 0);
     const fresh =
       Number.isFinite(acquiredAt) &&
       resolveNow(now).getTime() - acquiredAt < MIGRATION_LOCK_STALE_MS;
@@ -446,36 +461,51 @@ export function createStateService(options = {}) {
         true,
       );
     }
-    // A crashed writer leaves its lock behind; once the lease is stale the
-    // next service call takes it over through an atomic rename and verifies
-    // the resulting lease token is its own before proceeding.
-    const takeoverTemp = `${paths.lockPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    // Compare-and-swap removal: atomically remove the current lease and act
+    // only if the removed bytes are exactly the stale lease observed above.
+    const removalPath = `${paths.lockPath}.${process.pid}.${randomBytes(6).toString("hex")}.removing`;
     try {
-      fs.writeFileSync(takeoverTemp, payload, "utf8");
-      fs.renameSync(takeoverTemp, paths.lockPath);
-    } catch (takeoverCause) {
-      try {
-        fs.unlinkSync(takeoverTemp);
-      } catch {
-        // The takeover temp may never have been written.
+      fs.renameSync(paths.lockPath, removalPath);
+    } catch (cause) {
+      if (cause?.code === "ENOENT") {
+        return error("MIGRATION_BUSY", "Another contender removed the stale migration lock first; retry.", true);
       }
-      return error("MIGRATION_BUSY", `Unable to take over the stale migration lock: ${processErrorDetail(takeoverCause)}`, true);
+      return error("MIGRATION_BUSY", `Unable to take over the stale migration lock: ${processErrorDetail(cause)}`, true);
     }
-    let current = null;
+    let removed = null;
     try {
-      current = JSON.parse(fs.readFileSync(paths.lockPath, "utf8"));
+      removed = fs.readFileSync(removalPath, "utf8");
     } catch {
-      current = null;
+      removed = null;
     }
-    if (current?.token !== token) {
-      // Another owner won the takeover race and holds the verified lease.
+    try {
+      fs.unlinkSync(removalPath);
+    } catch {
+      // The removal record is best-effort; its bytes were read above.
+    }
+    if (removed !== observed) {
+      // The lease changed between observation and removal: another owner
+      // refreshed or took it over. Restore the removed lease and yield.
+      try {
+        fs.writeFileSync(paths.lockPath, removed, { encoding: "utf8", flag: "wx" });
+      } catch {
+        // A newer owner already re-created the lock; their lease stands.
+      }
       return error(
         "MIGRATION_BUSY",
-        `Another process (pid ${current?.pid ?? "unknown"}) won the race to take over the stale migration lock; retry once it finishes.`,
+        "The migration lock changed between observation and takeover; retry.",
         true,
       );
     }
-    return { ok: true, token, recovered: true };
+    try {
+      fs.writeFileSync(paths.lockPath, payloadFor(observedGeneration + 1), { encoding: "utf8", flag: "wx" });
+    } catch (cause) {
+      if (cause?.code === "EEXIST") {
+        return error("MIGRATION_BUSY", "Another contender installed a lease while the takeover was in flight; retry.", true);
+      }
+      return error("MIGRATION_LOCK_FAILED", `Unable to install the migration lease: ${processErrorDetail(cause)}`, true);
+    }
+    return { ok: true, token, generation: observedGeneration + 1, recovered: true };
   }
 
   function releaseMigrationLock(paths, token) {
@@ -503,20 +533,20 @@ export function createStateService(options = {}) {
     } catch {
       payload = null;
     }
+    try {
+      fs.unlinkSync(removedPath);
+    } catch {
+      // The lease is released even when the removal record cannot be cleaned.
+    }
     if (payload?.token === token) {
-      try {
-        fs.unlinkSync(removedPath);
-      } catch {
-        // The lease is released even when the removal record cannot be cleaned.
-      }
       return;
     }
     // The lease was taken over mid-operation; restore the current owner's
-    // lock so their release still finds their own token in place.
+    // lease without clobbering any newer lease installed in the meantime.
     try {
-      fs.renameSync(removedPath, paths.lockPath);
+      fs.writeFileSync(paths.lockPath, removed, { encoding: "utf8", flag: "wx" });
     } catch {
-      // If the restore fails the lease is lost; the next call re-acquires.
+      // A newer owner already holds the lock; their lease stands.
     }
   }
 
