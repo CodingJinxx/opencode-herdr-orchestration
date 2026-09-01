@@ -1,8 +1,9 @@
 import {
-  SHEEP_BUILD_PROMPT,
-  SHEEP_PLAN_PROMPT,
-  SHEPHERD_BUILD_PROMPT,
-  SHEPHERD_PLAN_PROMPT,
+  GRAZER_PROMPT,
+  SHEEPDOG_PROMPT,
+  SHEEP_PROMPT,
+  SHEPHERD_GOVERNOR_PROMPT,
+  SHEPHERD_PROMPT,
   SHEARER_REVIEW_PROMPT,
 } from "./prompts.js";
 
@@ -66,6 +67,112 @@ const markdownOnly = {
   "**/*.md": "allow",
 };
 
+// Constrained orchestration state tools. The planning shepherd authors plan
+// artifacts; shepherd-governor and sheepdog read the authoritative plan, and
+// sheepdog records and reads execution artifacts. This matrix is the single
+// source of truth for both the plugin-level tool enforcement (src/index.js)
+// and the per-agent permission entries below.
+export const STATE_TOOLS = Object.freeze({
+  planWrite: "herdr_plan_write",
+  planRead: "herdr_plan_read",
+  executionWrite: "herdr_execution_write",
+  executionRead: "herdr_execution_read",
+});
+
+export const STATE_TOOL_ACCESS = Object.freeze(
+  new Map([
+    [STATE_TOOLS.planWrite, new Set(["shepherd"])],
+    [STATE_TOOLS.planRead, new Set(["shepherd", "shepherd-governor", "sheepdog"])],
+    [STATE_TOOLS.executionWrite, new Set(["sheepdog"])],
+    [STATE_TOOLS.executionRead, new Set(["sheepdog"])],
+  ]),
+);
+
+const ALL_STATE_TOOLS = Object.freeze(Object.values(STATE_TOOLS));
+
+function stateToolPermissions(allowedTools) {
+  return Object.fromEntries(
+    ALL_STATE_TOOLS.map((name) => [name, allowedTools.includes(name) ? "allow" : "deny"]),
+  );
+}
+
+const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
+const GOVERNOR_STATE_TOOLS = [STATE_TOOLS.planRead];
+const SHEEPDOG_STATE_TOOLS = [
+  STATE_TOOLS.planRead,
+  STATE_TOOLS.executionWrite,
+  STATE_TOOLS.executionRead,
+];
+
+const SHEPHERD_SPAWNABLE_AGENTS = ["grazer"];
+const GOVERNOR_SPAWNABLE_AGENTS = ["grazer", "sheepdog"];
+const SHEEPDOG_SPAWNABLE_AGENTS = ["grazer", "sheep", "shearer-low", "shearer-medium"];
+
+const SHEEPDOG_LIFECYCLE_ALLOWS = {
+  "git merge --ff-only*": "allow",
+  "git merge --no-ff --no-edit*": "allow",
+  "git merge --continue": "allow",
+  "git merge --abort": "allow",
+  "git merge --quit": "allow",
+  "git cherry-pick*": "allow",
+  "git cherry-pick --continue": "allow",
+  "git cherry-pick --skip": "allow",
+  "git cherry-pick --abort": "allow",
+  "git cherry-pick --quit": "allow",
+  "git commit*": "allow",
+};
+
+const SHEEPDOG_DENIALS = {
+  "git push*": "deny",
+  "git pull*": "deny",
+  "git fetch*": "deny",
+  "git remote*": "deny",
+  "git rebase*": "deny",
+  "git reset*": "deny",
+  "git revert*": "deny",
+  "git checkout*": "deny",
+  "git switch*": "deny",
+  "git stash*": "deny",
+  "git clean*": "deny",
+  "git worktree*": "deny",
+  "git branch -D*": "deny",
+  "git branch -d*": "deny",
+  "git commit --no-verify*": "deny",
+  "git commit * --no-verify*": "deny",
+  "git commit --amend*": "deny",
+  "git commit * --amend*": "deny",
+  "git merge *--no-verify*": "deny",
+};
+
+const SHEEP_DENIALS = {
+  "herdr*": "deny",
+  "gh*": "deny",
+  "npm publish*": "deny",
+  "git push*": "deny",
+  "git pull*": "deny",
+  "git fetch*": "deny",
+  "git remote*": "deny",
+  "git merge*": "deny",
+  "git cherry-pick*": "deny",
+  "git rebase*": "deny",
+  "git reset*": "deny",
+  "git revert*": "deny",
+  "git checkout*": "deny",
+  "git switch*": "deny",
+  "git stash*": "deny",
+  "git clean*": "deny",
+  "git worktree*": "deny",
+  "git tag*": "deny",
+  "git apply*": "deny",
+  "git am*": "deny",
+  "git branch -D*": "deny",
+  "git branch -d*": "deny",
+  "git commit --no-verify*": "deny",
+  "git commit *--no-verify*": "deny",
+  "git commit --amend*": "deny",
+  "git commit *--amend*": "deny",
+};
+
 function mergeRecord(base, override) {
   if (!base || typeof base !== "object" || Array.isArray(base)) return override ?? base;
   if (!override || typeof override !== "object" || Array.isArray(override)) return override ?? base;
@@ -80,30 +187,40 @@ export function mergeAgent(defaults, override) {
   return mergeRecord(defaults, override);
 }
 
+function spawnMatrix(agents) {
+  return Object.fromEntries(
+    agents.map((agent) => [`herdr agent start * --kind opencode --pane * -- --agent ${agent}`, "allow"]),
+  );
+}
+
 export function createAgents(options = {}) {
   const shepherdModel = options.shepherdModel;
   const workerModel = options.workerModel ?? "litellm/glm-5.3-flash";
   const workerVariant = options.workerVariant;
+  const sheepdogModel = options.sheepdogModel ?? "litellm/glm-5.3-flash";
+  const sheepdogVariant = options.sheepdogVariant;
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
-  const shepherdBuildPermissions = options.shepherdBuildPermissions ?? {};
-  const shepherdBuildPrompt = appendPrompt(SHEPHERD_BUILD_PROMPT, options.shepherdBuildPromptAppend);
+  const shepherdPermissions = options.shepherdPermissions ?? {};
+  const shepherdPrompt = appendPrompt(SHEPHERD_PROMPT, options.shepherdPromptAppend);
 
   return {
-    "shepherd-plan": {
+    shepherd: {
       mode: "primary",
       ...(shepherdModel ? { model: shepherdModel } : {}),
-      description: "Researches and presents implementation-ready plans through sheep-plan workers without implementing them.",
-      prompt: SHEPHERD_PLAN_PROMPT,
+      description:
+        "Plans through grazer research and presents implementation-ready plans; never implements, integrates, or delivers.",
+      prompt: shepherdPrompt,
       permission: {
         grep: "allow",
         todowrite: "allow",
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
+        ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
-          "herdr agent start * --kind opencode --pane * -- --agent sheep-plan": "allow",
+          ...spawnMatrix(SHEPHERD_SPAWNABLE_AGENTS),
           "git status*": "allow",
           "git diff*": "allow",
           "git log*": "allow",
@@ -115,44 +232,38 @@ export function createAgents(options = {}) {
           "git add *.md": "allow",
           "git add **/*.md": "allow",
           "git commit*": "allow",
-          "git push origin HEAD": "allow",
-          "git push -u origin HEAD": "allow",
-          "git push --set-upstream origin HEAD": "allow",
+          "git push*": "deny",
           "git commit --no-verify*": "deny",
           "git commit * --no-verify*": "deny",
-          "git push *main*": "deny",
-          "git push *master*": "deny",
-          "git push *:*": "deny",
-          "git push *--no-verify*": "deny",
-          "git push *--force*": "deny",
-          "git push *-f*": "deny",
-          "git push *--delete*": "deny",
+          "git commit --amend*": "deny",
+          "git commit * --amend*": "deny",
           "git branch -D*": "deny",
           "git branch -d*": "deny",
           "git worktree remove * --force*": "deny",
           ...separatorDenials,
         },
         task: "deny",
+        ...shepherdPermissions,
       },
     },
 
-    "shepherd-build": {
+    "shepherd-governor": {
       mode: "primary",
       ...(shepherdModel ? { model: shepherdModel } : {}),
-      description: "Executes approved plans through planning, implementation, and independent review workers.",
-      prompt: shepherdBuildPrompt,
+      description:
+        "Executes approved plans through sheepdog squads, verifies results, and owns final delivery: pushes, merges, PRs.",
+      prompt: SHEPHERD_GOVERNOR_PROMPT,
       permission: {
         grep: "allow",
+        todowrite: "allow",
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
+        ...stateToolPermissions(GOVERNOR_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
-          "herdr agent start * --kind opencode --pane * -- --agent sheep-plan": "allow",
-          "herdr agent start * --kind opencode --pane * -- --agent sheep-build": "allow",
-          "herdr agent start * --kind opencode --pane * -- --agent shearer-review-low": "allow",
-          "herdr agent start * --kind opencode --pane * -- --agent shearer-review-medium": "allow",
+          ...spawnMatrix(GOVERNOR_SPAWNABLE_AGENTS),
           "git status*": "allow",
           "git diff*": "allow",
           "git log*": "allow",
@@ -160,7 +271,7 @@ export function createAgents(options = {}) {
           "git branch*": "allow",
           "git rev-parse*": "allow",
           "git merge-base*": "allow",
-          "git worktree*": "allow",
+          "git worktree list*": "allow",
           "git add *.md": "allow",
           "git add **/*.md": "allow",
           "git commit*": "allow",
@@ -175,26 +286,64 @@ export function createAgents(options = {}) {
           "git push *--delete*": "deny",
           "git push *--no-verify*": "deny",
           "git commit *--no-verify*": "deny",
+          "git commit --amend*": "deny",
+          "git commit *--amend*": "deny",
           "git merge *--no-verify*": "deny",
           "git branch -D*": "deny",
           "git branch -d*": "deny",
+          "git worktree add*": "deny",
+          "git worktree remove*": "deny",
+          "git worktree move*": "deny",
+          "git worktree prune*": "deny",
           "git worktree remove * --force*": "deny",
+          "herdr worktree create*": "deny",
+          "herdr worktree open*": "deny",
+          "herdr worktree remove*": "deny",
           "gh pr create*": "allow",
           "gh pr view*": "allow",
           "gh pr checks*": "allow",
           ...separatorDenials,
         },
         task: "deny",
-        ...shepherdBuildPermissions,
       },
     },
 
-    "sheep-plan": {
+    sheepdog: {
+      mode: "primary",
+      model: sheepdogModel,
+      ...(sheepdogVariant ? { variant: sheepdogVariant } : {}),
+      description:
+        "Leads execution squads of grazer, sheep, and shearers, prepares worker branches and worktrees, owns validation, review tiers, retries, and conflict recovery, and performs clean local integration with merge and cherry-pick lifecycle commands only.",
+      prompt: SHEEPDOG_PROMPT,
+      permission: {
+        read: "allow",
+        glob: "allow",
+        grep: "allow",
+        list: "allow",
+        todowrite: "allow",
+        edit: "deny",
+        apply_patch: "deny",
+        herdr_agent_response: "allow",
+        ...stateToolPermissions(SHEEPDOG_STATE_TOOLS),
+        bash: {
+          "*": "deny",
+          ...safeGitInspection,
+          ...herdrInspection,
+          ...spawnMatrix(SHEEPDOG_SPAWNABLE_AGENTS),
+          ...SHEEPDOG_LIFECYCLE_ALLOWS,
+          ...SHEEPDOG_DENIALS,
+          ...separatorDenials,
+        },
+        task: "deny",
+      },
+    },
+
+    grazer: {
       mode: "primary",
       model: workerModel,
       ...(workerVariant ? { variant: workerVariant } : {}),
-      description: "Performs read-only repository research for a shepherd.",
-      prompt: SHEEP_PLAN_PROMPT,
+      description: "Performs read-only repository research for the shepherd, shepherd-governor, or sheepdog.",
+      prompt: GRAZER_PROMPT,
       permission: {
         read: "allow",
         glob: "allow",
@@ -204,51 +353,41 @@ export function createAgents(options = {}) {
         edit: "deny",
         apply_patch: "deny",
         herdr_agent_response: "deny",
+        ...stateToolPermissions([]),
         bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
         task: "deny",
       },
     },
 
-    "sheep-build": {
+    sheep: {
       mode: "primary",
       model: workerModel,
       ...(workerVariant ? { variant: workerVariant } : {}),
-      description: "Implements a bounded task, verifies it, and hands a local commit to shepherd-build.",
-      prompt: SHEEP_BUILD_PROMPT,
+      description:
+        "Implements a bounded task, verifies it, and hands a local commit to sheepdog.",
+      prompt: SHEEP_PROMPT,
       permission: {
         grep: "allow",
         herdr_agent_response: "deny",
+        ...stateToolPermissions([]),
         bash: {
           "*": "allow",
-          "git push*": "deny",
-          "git merge*": "deny",
-          "git pull*": "deny",
-          "git branch -D*": "deny",
-          "git branch -d*": "deny",
-          "git rebase*": "deny",
-          "git reset*": "deny",
-          "git commit *--no-verify*": "deny",
-          "git commit --no-verify*": "deny",
-          "git *;*": "deny",
-          "git *&&*": "deny",
-          "git *||*": "deny",
-          "git *|*": "deny",
-          "git *>*": "deny",
-          "git *<*": "deny",
+          ...SHEEP_DENIALS,
+          ...separatorDenials,
         },
         task: "deny",
       },
     },
 
-    "shearer-review-low": reviewerAgent(reviewerModel, "low"),
-    "shearer-review-medium": reviewerAgent(reviewerModel, "medium"),
+    "shearer-low": reviewerAgent(reviewerModel, "low"),
+    "shearer-medium": reviewerAgent(reviewerModel, "medium"),
   };
 }
 
 function appendPrompt(prompt, addition) {
   if (addition === undefined || addition === "") return prompt;
   if (typeof addition !== "string") {
-    throw new TypeError("shepherdBuildPromptAppend must be a string.");
+    throw new TypeError("shepherdPromptAppend must be a string.");
   }
   return `${prompt.trimEnd()}\n\n${addition.trim()}`;
 }
@@ -269,6 +408,7 @@ function reviewerAgent(model, variant) {
       apply_patch: "deny",
       todowrite: "deny",
       herdr_agent_response: "deny",
+      ...stateToolPermissions([]),
       bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
       task: "deny",
     },

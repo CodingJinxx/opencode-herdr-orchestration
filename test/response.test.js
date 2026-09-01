@@ -2,8 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ACKNOWLEDGEMENT_REPLIES,
+  MILESTONE_REPLIES,
+  RESPONSE_MATRIX,
   createResponseService,
   findPinnedResponse,
+  parseWorkerReply,
   selectLatestCompletedResponse,
 } from "../src/response.js";
 
@@ -17,7 +21,7 @@ function assistant({
   text,
   finish = "stop",
   completed = 2,
-  role = "sheep-plan",
+  role = "grazer",
   error,
   ignored = false,
 }) {
@@ -37,7 +41,7 @@ function assistant({
   };
 }
 
-function exported(messages, role = "sheep-plan") {
+function exported(messages, role = "grazer") {
   return { info: { id: "ses_worker", agent: role }, messages };
 }
 
@@ -71,7 +75,50 @@ function runner(getExport, status = "done") {
   };
 }
 
-const context = { agent: "shepherd-plan", abort: new AbortController().signal };
+const abort = new AbortController().signal;
+const contextFor = (agent) => ({ agent, abort });
+
+test("defines the approved response retrieval matrix", () => {
+  assert.deepEqual(
+    [...RESPONSE_MATRIX.entries()],
+    [
+      ["shepherd", new Set(["grazer"])],
+      ["shepherd-governor", new Set(["grazer", "sheepdog"])],
+      ["sheepdog", new Set(["grazer", "sheep", "shearer-low", "shearer-medium"])],
+    ],
+  );
+});
+
+test("classifies acknowledgement and post-milestone reply keywords", () => {
+  assert.deepEqual(ACKNOWLEDGEMENT_REPLIES, new Set(["ACK", "CORRECT", "REPLAN", "STOP"]));
+  assert.deepEqual(MILESTONE_REPLIES, new Set(["CONTINUE", "CORRECT", "REPLAN", "STOP", "FINALIZE"]));
+
+  assert.equal(parseWorkerReply("ACK\nstarting now").keyword, "ACK");
+  assert.equal(parseWorkerReply("ACK\nstarting now").acknowledgement, true);
+  assert.equal(parseWorkerReply("ACK\nstarting now").milestone, false);
+
+  assert.equal(parseWorkerReply("FINALIZE: task done").keyword, "FINALIZE");
+  assert.equal(parseWorkerReply("FINALIZE: task done").milestone, true);
+  assert.equal(parseWorkerReply("FINALIZE: task done").acknowledgement, false);
+  assert.equal(parseWorkerReply("FINALIZE: task done").detail, "task done");
+
+  for (const keyword of ["CORRECT", "REPLAN", "STOP"]) {
+    const reply = parseWorkerReply(`${keyword}\ndetail`);
+    assert.equal(reply.acknowledgement, true);
+    assert.equal(reply.milestone, true);
+  }
+
+  assert.equal(parseWorkerReply("CONTINUE\nready").milestone, true);
+  assert.equal(parseWorkerReply("CONTINUE\nready").acknowledgement, false);
+});
+
+test("returns null for responses without a leading reply keyword", () => {
+  assert.equal(parseWorkerReply("The task is complete.\nACK later"), null);
+  assert.equal(parseWorkerReply(""), null);
+  assert.equal(parseWorkerReply(undefined), null);
+  assert.equal(parseWorkerReply(null), null);
+  assert.equal(parseWorkerReply("  \nSTOP\nblocked").keyword, "STOP");
+});
 
 test("selects only the latest turn's completed final response", () => {
   const result = selectLatestCompletedResponse(
@@ -122,15 +169,104 @@ test("paginates without splitting UTF-8 and reconstructs exact text", async () =
   });
 
   const pages = [];
-  let result = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
+  let result = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
   while (true) {
     assert.equal(result.ok, true);
     pages.push(result.text);
     if (result.complete) break;
-    result = await retrieve({ cursor: result.cursor, maxBytes: 1024 }, context);
+    result = await retrieve({ cursor: result.cursor, maxBytes: 1024 }, contextFor("shepherd"));
   }
   assert.equal(pages.join(""), text);
   assert.equal(result.nextOffset, Buffer.byteLength(text, "utf8"));
+});
+
+test("carries the reply keyword on the first page and not on continuation pages", async () => {
+  const text = `ACK\n${"x".repeat(3000)}`;
+  const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text })]);
+  const retrieve = createResponseService({
+    run: runner(() => fixture),
+    secret: Buffer.alloc(32, 2),
+  });
+  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
+  assert.equal(first.reply.keyword, "ACK");
+  assert.equal(first.reply.acknowledgement, true);
+  const second = await retrieve({ cursor: first.cursor, maxBytes: 1024 }, contextFor("shepherd"));
+  assert.equal(second.ok, true);
+  assert.equal(second.reply, undefined);
+});
+
+test("enforces the caller-to-target retrieval matrix", async () => {
+  const fixtureFor = (role) => exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "done", role })], role);
+  const retrieve = createResponseService({ run: runner(() => fixtureFor("sheep")), secret: Buffer.alloc(32, 3) });
+
+  // Leaves may not retrieve at all.
+  for (const agent of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const result = await retrieve({ target: "worker_1" }, contextFor(agent));
+    assert.equal(result.error.code, "UNAUTHORIZED_AGENT", `${agent} must not retrieve responses`);
+  }
+
+  // Shepherd may retrieve only grazer.
+  assert.equal(
+    (await retrieve({ target: "worker_1" }, contextFor("shepherd"))).error.code,
+    "UNSUPPORTED_WORKER_ROLE",
+    "shepherd must not retrieve sheep",
+  );
+
+  // Governor may retrieve grazer and sheepdog but not sheep.
+  const governorRetrieve = createResponseService({
+    run: runner(() => fixtureFor("grazer")),
+    secret: Buffer.alloc(32, 3),
+  });
+  assert.equal((await governorRetrieve({ target: "worker_1" }, contextFor("shepherd-governor"))).ok, true);
+  const sheepFixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "done", role: "sheep" })], "sheep");
+  const governorBlocked = createResponseService({
+    run: runner(() => sheepFixture),
+    secret: Buffer.alloc(32, 3),
+  });
+  assert.equal(
+    (await governorBlocked({ target: "worker_1" }, contextFor("shepherd-governor"))).error.code,
+    "UNSUPPORTED_WORKER_ROLE",
+    "governor must not retrieve sheep",
+  );
+
+  // Sheepdog may retrieve sheep, shearers, and grazer but not the governor.
+  const dogRetrieve = createResponseService({
+    run: runner(() => fixtureFor("shearer-medium")),
+    secret: Buffer.alloc(32, 3),
+  });
+  assert.equal((await dogRetrieve({ target: "worker_1" }, contextFor("sheepdog"))).ok, true);
+  const governorFixture = exported(
+    [user("u1"), assistant({ id: "final", parentID: "u1", text: "done", role: "shepherd-governor" })],
+    "shepherd-governor",
+  );
+  const dogBlocked = createResponseService({ run: runner(() => governorFixture), secret: Buffer.alloc(32, 3) });
+  assert.equal(
+    (await dogBlocked({ target: "worker_1" }, contextFor("sheepdog"))).error.code,
+    "UNSUPPORTED_WORKER_ROLE",
+    "sheepdog must not retrieve the governor",
+  );
+});
+
+test("continuation pages stay within the caller's matrix targets", async () => {
+  // Sheepdog pins a sheep response; a continuation must remain valid for sheepdog.
+  const sheepFixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x".repeat(3000), role: "sheep" })], "sheep");
+  const retrieve = createResponseService({ run: runner(() => sheepFixture), secret: Buffer.alloc(32, 4) });
+  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("sheepdog"));
+  assert.equal(first.ok, true);
+  const second = await retrieve({ cursor: first.cursor, maxBytes: 1024 }, contextFor("sheepdog"));
+  assert.equal(second.ok, true);
+
+  // The same pinned sheep response is out of matrix for the shepherd.
+  const shepherdRetrieve = createResponseService({
+    run: runner(() => sheepFixture),
+    secret: Buffer.alloc(32, 4),
+  });
+  const pinned = await shepherdRetrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("sheepdog"));
+  assert.equal(
+    (await shepherdRetrieve({ cursor: pinned.cursor, maxBytes: 1024 }, contextFor("shepherd"))).error.code,
+    "MESSAGE_CHANGED",
+    "shepherd must not continue a sheepdog pin outside its matrix",
+  );
 });
 
 test("continuation does not require the Herdr target to remain live", async () => {
@@ -143,30 +279,26 @@ test("continuation does not require the Herdr target to remain live", async () =
       if (command === "herdr") herdrCalls += 1;
       return base(command, args, signal);
     },
-    secret: Buffer.alloc(32, 2),
+    secret: Buffer.alloc(32, 5),
   });
-  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
-  const second = await retrieve({ cursor: first.cursor, maxBytes: 1024 }, context);
+  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
+  const second = await retrieve({ cursor: first.cursor, maxBytes: 1024 }, contextFor("shepherd"));
   assert.equal(second.ok, true);
   assert.equal(herdrCalls, 1);
 });
 
-test("rejects unauthorized callers, active workers, invalid targets, and cursor tampering", async () => {
+test("rejects active workers, invalid targets, and cursor tampering", async () => {
   const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x".repeat(3000) })]);
-  const retrieve = createResponseService({ run: runner(() => fixture), secret: Buffer.alloc(32, 3) });
-  assert.equal(
-    (await retrieve({ target: "worker_1" }, { ...context, agent: "sheep-build" })).error.code,
-    "UNAUTHORIZED_AGENT",
-  );
-  assert.equal((await retrieve({ target: "bad target" }, context)).error.code, "INVALID_REQUEST");
+  const retrieve = createResponseService({ run: runner(() => fixture), secret: Buffer.alloc(32, 6) });
+  assert.equal((await retrieve({ target: "bad target" }, contextFor("shepherd"))).error.code, "INVALID_REQUEST");
 
-  const active = createResponseService({ run: runner(() => fixture, "working"), secret: Buffer.alloc(32, 3) });
-  assert.equal((await active({ target: "worker_1" }, context)).error.code, "AGENT_NOT_SETTLED");
+  const active = createResponseService({ run: runner(() => fixture, "working"), secret: Buffer.alloc(32, 6) });
+  assert.equal((await active({ target: "worker_1" }, contextFor("shepherd"))).error.code, "AGENT_NOT_SETTLED");
 
-  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
+  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
   const [payload, signature] = first.cursor.split(".");
   const tampered = `${payload.startsWith("a") ? "b" : "a"}${payload.slice(1)}.${signature}`;
-  assert.equal((await retrieve({ cursor: tampered }, context)).error.code, "INVALID_CURSOR");
+  assert.equal((await retrieve({ cursor: tampered }, contextFor("shepherd"))).error.code, "INVALID_CURSOR");
 });
 
 test("rejects expired cursors and changed pinned messages", async () => {
@@ -176,32 +308,32 @@ test("rejects expired cursors and changed pinned messages", async () => {
     exported([user("u1"), assistant({ id: "final", parentID: "u1", text: currentText })]);
   const retrieve = createResponseService({
     run: runner(getExport),
-    secret: Buffer.alloc(32, 4),
+    secret: Buffer.alloc(32, 7),
     now: () => currentTime,
     cursorTtlMs: 100,
   });
-  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
+  const first = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
   currentText = `changed${currentText}`;
-  assert.equal((await retrieve({ cursor: first.cursor }, context)).error.code, "MESSAGE_CHANGED");
+  assert.equal((await retrieve({ cursor: first.cursor }, contextFor("shepherd"))).error.code, "MESSAGE_CHANGED");
 
   currentText = "a".repeat(3000);
-  const fresh = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
+  const fresh = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
   currentTime = 1200;
-  assert.equal((await retrieve({ cursor: fresh.cursor }, context)).error.code, "EXPIRED_CURSOR");
+  assert.equal((await retrieve({ cursor: fresh.cursor }, contextFor("shepherd"))).error.code, "EXPIRED_CURSOR");
 });
 
 test("supports concurrent independent reads of the same worker", async () => {
   const text = "concurrent".repeat(1000);
   const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text })]);
-  const retrieve = createResponseService({ run: runner(() => fixture), secret: Buffer.alloc(32, 5) });
+  const retrieve = createResponseService({ run: runner(() => fixture), secret: Buffer.alloc(32, 8) });
 
   async function allPages() {
-    let page = await retrieve({ target: "worker_1", maxBytes: 1024 }, context);
+    let page = await retrieve({ target: "worker_1", maxBytes: 1024 }, contextFor("shepherd"));
     let output = "";
     while (page.ok) {
       output += page.text;
       if (page.complete) return output;
-      page = await retrieve({ cursor: page.cursor, maxBytes: 1024 }, context);
+      page = await retrieve({ cursor: page.cursor, maxBytes: 1024 }, contextFor("shepherd"));
     }
     throw new Error(page.error.code);
   }
@@ -219,9 +351,9 @@ test("uses argv execution rather than interpolating target text", async () => {
       if (command === "herdr") return herdrAgent();
       return JSON.stringify(exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "done" })]));
     },
-    secret: Buffer.alloc(32, 6),
+    secret: Buffer.alloc(32, 9),
   });
-  const result = await retrieve({ target: "worker_1" }, context);
+  const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
   assert.equal(result.ok, true);
   assert.deepEqual(calls[0], ["herdr", ["agent", "get", "worker_1"]]);
 });
@@ -235,10 +367,10 @@ test("returns a specific error when a session export exceeds the configured limi
       if (command === "herdr") return herdrAgent();
       throw failure;
     },
-    secret: Buffer.alloc(32, 7),
+    secret: Buffer.alloc(32, 10),
     maxExportBytes: 1024 * 1024,
   });
-  const result = await retrieve({ target: "worker_1" }, context);
+  const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
   assert.equal(result.error.code, "SESSION_EXPORT_TOO_LARGE");
   assert.equal(result.error.retryable, false);
 });

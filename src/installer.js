@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,12 +10,31 @@ export const PACKAGE_NAME = "opencode-herdr-orchestration";
 const NPM_COMMAND = "npm";
 const OPENCODE_COMMAND = "opencode";
 export const AGENT_NAMES = [
+  "shepherd",
+  "shepherd-governor",
+  "sheepdog",
+  "grazer",
+  "sheep",
+  "shearer-low",
+  "shearer-medium",
+];
+
+// Agents register dynamically through the plugin, so the package owns no agent
+// definition files today. Earlier package versions may have written some; those
+// are cleaned up strictly through the manifest below.
+export const OWNED_AGENT_FILES = [];
+export const AGENT_MANIFEST_SCHEMA = 1;
+export const AGENT_MANIFEST_FILE = "opencode-herdr-orchestration-manifest.json";
+export const MANAGED_AGENT_DIR = "agent";
+export const KNOWN_OBSOLETE_AGENTS = [
   "shepherd-plan",
   "shepherd-build",
   "sheep-plan",
   "sheep-build",
   "shearer-review-low",
   "shearer-review-medium",
+  "sheperd-plan",
+  "sheperd-build",
 ];
 
 export function configDirectory(env = process.env) {
@@ -183,14 +203,156 @@ export function restoreBackup(file, backup, existed = true) {
   else if (!existed) rmSync(file, { force: true });
 }
 
+export function agentFilesManifestPath(configDir) {
+  return join(configDir, AGENT_MANIFEST_FILE);
+}
+
+export function managedAgentRoot(configDir) {
+  return join(configDir, MANAGED_AGENT_DIR);
+}
+
+function fileDigest(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+// Manifest paths are relative to the config root, use POSIX separators, and
+// must stay strictly inside the managed agent directory. Anything else is
+// unsafe and is never deleted.
+function safeManagedPath(relPath) {
+  if (typeof relPath !== "string" || relPath.length === 0) return null;
+  if (relPath.includes("\\") || relPath.startsWith("/") || /^[A-Za-z]:/.test(relPath)) return null;
+  const segments = relPath.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) return null;
+  if (segments[0] !== MANAGED_AGENT_DIR || segments.length < 2) return null;
+  return segments.join("/");
+}
+
+export function readAgentFilesManifest(configDir) {
+  const file = agentFilesManifestPath(configDir);
+  if (!existsSync(file)) return { manifest: null, error: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    return { manifest: null, error: String(error?.message ?? error) };
+  }
+  if (parsed?.schema !== AGENT_MANIFEST_SCHEMA || parsed?.package !== PACKAGE_NAME || !Array.isArray(parsed.files)) {
+    return { manifest: null, error: `unsupported manifest at ${file}` };
+  }
+  return { manifest: parsed, error: null };
+}
+
+export function writeAgentFilesManifest(configDir, entries, version) {
+  const file = agentFilesManifestPath(configDir);
+  const contents = `${JSON.stringify(
+    { schema: AGENT_MANIFEST_SCHEMA, package: PACKAGE_NAME, version, digestAlgorithm: "sha256", files: entries ?? [] },
+    null,
+    2,
+  )}\n`;
+  if (existsSync(file) && readFileSync(file, "utf8") === contents) return { file, changed: false };
+  writeFileSync(file, contents, "utf8");
+  return { file, changed: true };
+}
+
+export function removeAgentFilesManifest(configDir) {
+  rmSync(agentFilesManifestPath(configDir), { force: true });
+}
+
+export function unownedObsoleteAgentFiles(configDir) {
+  const managedRoot = managedAgentRoot(configDir);
+  if (!existsSync(managedRoot)) return [];
+  return readdirSync(managedRoot)
+    .filter((name) => name.endsWith(".md") && KNOWN_OBSOLETE_AGENTS.includes(name.slice(0, -".md".length)))
+    .map((name) => `${MANAGED_AGENT_DIR}/${name}`);
+}
+
+// Deletes only files proven package-owned by the manifest (path inside the
+// managed root and digest still matching the recorded one). Modified, unowned,
+// and unsafe files are never deleted; exact remediation is reported instead.
+export function reconcileAgentFiles(configDir, { remove = false } = {}) {
+  const managedRoot = managedAgentRoot(configDir);
+  const report = { deleted: [], missing: [], remediation: [], manifestEntries: [] };
+  const { manifest, error } = readAgentFilesManifest(configDir);
+  if (error) {
+    report.remediation.push({
+      path: agentFilesManifestPath(configDir),
+      reason: "unreadable",
+      remediation: `Review and fix or remove ${agentFilesManifestPath(configDir)} manually; no package-owned files were touched.`,
+    });
+  } else {
+    const owned = new Set();
+    for (const entry of Array.isArray(manifest?.files) ? manifest.files : []) {
+      const relPath = safeManagedPath(entry?.path);
+      if (!relPath) {
+        const shown = JSON.stringify(entry?.path ?? null);
+        report.remediation.push({
+          path: shown,
+          reason: "unsafe",
+          remediation: `Manifest entry ${shown} does not stay inside ${MANAGED_AGENT_DIR}/; delete that file manually after review. Nothing was deleted.`,
+        });
+        report.manifestEntries.push(entry);
+        continue;
+      }
+      owned.add(relPath);
+      const file = join(configDir, ...relPath.split("/"));
+      if (!existsSync(file)) {
+        report.missing.push(relPath);
+        continue;
+      }
+      const obsolete = remove || !OWNED_AGENT_FILES.includes(relPath);
+      if (!obsolete) {
+        report.manifestEntries.push(entry);
+        continue;
+      }
+      if (entry.digest === fileDigest(file)) {
+        rmSync(file, { force: true });
+        report.deleted.push(relPath);
+        owned.delete(relPath);
+      } else {
+        report.manifestEntries.push(entry);
+        report.remediation.push({
+          path: relPath,
+          reason: "modified",
+          remediation: `${file} was modified after ${entry.version ?? "an earlier version"} installed it; review and delete it manually.`,
+        });
+      }
+    }
+    for (const relPath of unownedObsoleteAgentFiles(configDir)) {
+      if (owned.has(relPath)) continue;
+      report.remediation.push({
+        path: relPath,
+        reason: "unowned",
+        remediation: `${join(configDir, ...relPath.split("/"))} defines the retired agent ${relPath.split("/").pop().slice(0, -".md".length)} but is not package-owned; archive or delete it manually.`,
+      });
+    }
+  }
+  if (report.deleted.length && existsSync(managedRoot) && readdirSync(managedRoot).length === 0) {
+    rmSync(managedRoot, { recursive: true, force: true });
+  }
+  return report;
+}
+
 export function validateOpenCode(configDir) {
-  const output = run(OPENCODE_COMMAND, ["debug", "agent", "shepherd-build"], {
+  const env = { ...process.env, OPENCODE_DISABLE_PROJECT_CONFIG: "1" };
+  for (const name of AGENT_NAMES) {
+    const output = run(OPENCODE_COMMAND, ["debug", "agent", name], {
+      cwd: configDir,
+      env,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    let parsed;
+    try {
+      parsed = JSON.parse(output);
+    } catch {}
+    if (parsed?.name !== name) throw new Error(`OpenCode did not resolve ${name} during validation.`);
+  }
+  const list = run(OPENCODE_COMMAND, ["agent", "list"], {
     cwd: configDir,
-    env: { ...process.env, OPENCODE_DISABLE_PROJECT_CONFIG: "1" },
+    env,
     maxBuffer: 32 * 1024 * 1024,
   });
-  const parsed = JSON.parse(output);
-  if (parsed.name !== "shepherd-build") throw new Error("OpenCode did not resolve shepherd-build after installation.");
+  const missing = AGENT_NAMES.filter((name) => !list.includes(`${name} (primary)`));
+  if (missing.length) throw new Error(`OpenCode agent list did not report: ${missing.join(", ")}.`);
   return true;
 }
 
@@ -211,6 +373,10 @@ export function status(configDir, packageRoot) {
     });
     detectedAgents = AGENT_NAMES.filter((name) => output.includes(`${name} (primary)`));
   } catch {}
+  let obsoleteAgentFiles = [];
+  try {
+    obsoleteAgentFiles = unownedObsoleteAgentFiles(configDir);
+  } catch {}
   let latest = null;
   let latestVersionError = null;
   try {
@@ -229,5 +395,6 @@ export function status(configDir, packageRoot) {
     pluginConfigured: configured,
     detectedAgents,
     agentsReady: detectedAgents.length === AGENT_NAMES.length,
+    obsoleteAgentFiles,
   };
 }

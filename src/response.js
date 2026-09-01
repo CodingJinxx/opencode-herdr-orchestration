@@ -5,12 +5,10 @@ import { promisify } from "node:util";
 import { tool } from "@opencode-ai/plugin";
 
 const execFileAsync = promisify(execFile);
-const ALLOWED_CALLERS = new Set(["shepherd-plan", "shepherd-build"]);
-const ALLOWED_TARGET_ROLES = new Set([
-  "sheep-plan",
-  "sheep-build",
-  "shearer-review-low",
-  "shearer-review-medium",
+export const RESPONSE_MATRIX = new Map([
+  ["shepherd", new Set(["grazer"])],
+  ["shepherd-governor", new Set(["grazer", "sheepdog"])],
+  ["sheepdog", new Set(["grazer", "sheep", "shearer-low", "shearer-medium"])],
 ]);
 const SETTLED_STATES = new Set(["idle", "done"]);
 const DEFAULT_PAGE_BYTES = 8192;
@@ -20,6 +18,23 @@ const MAX_TOOL_OUTPUT_BYTES = 32768;
 const DEFAULT_CURSOR_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_MAX_EXPORT_BYTES = 64 * 1024 * 1024;
 const MAX_HERDR_OUTPUT_BYTES = 1024 * 1024;
+
+export const ACKNOWLEDGEMENT_REPLIES = new Set(["ACK", "CORRECT", "REPLAN", "STOP"]);
+export const MILESTONE_REPLIES = new Set(["CONTINUE", "CORRECT", "REPLAN", "STOP", "FINALIZE"]);
+const REPLY_KEYWORD_PATTERN = /^\s*(ACK|CONTINUE|CORRECT|REPLAN|STOP|FINALIZE)\b:?[ \t]*([^\n]*)/;
+
+export function parseWorkerReply(text) {
+  if (typeof text !== "string") return null;
+  const match = REPLY_KEYWORD_PATTERN.exec(text);
+  if (!match) return null;
+  const keyword = match[1];
+  return {
+    keyword,
+    detail: match[2].trim(),
+    acknowledgement: ACKNOWLEDGEMENT_REPLIES.has(keyword),
+    milestone: MILESTONE_REPLIES.has(keyword),
+  };
+}
 
 function error(code, message, retryable = false) {
   return { ok: false, error: { code, message, retryable } };
@@ -226,6 +241,7 @@ function makePage({ response, target, offset, requestedBytes, secret, expiresAt 
       totalBytes: bytes.length,
       complete,
       cursor: complete ? null : encodeCursor(payload, secret),
+      reply: offset === 0 ? parseWorkerReply(response.text) : undefined,
       text: bytes.subarray(offset, end).toString("utf8"),
     };
     if (Buffer.byteLength(JSON.stringify(result), "utf8") <= MAX_TOOL_OUTPUT_BYTES) return result;
@@ -241,7 +257,7 @@ function validateTarget(target) {
   return { ok: true };
 }
 
-async function resolveInitialResponse(target, run, signal, maxExportBytes) {
+async function resolveInitialResponse(target, run, signal, maxExportBytes, allowedRoles) {
   let agent;
   try {
     const output = await run("herdr", ["agent", "get", target], signal, MAX_HERDR_OUTPUT_BYTES);
@@ -274,13 +290,20 @@ async function resolveInitialResponse(target, run, signal, maxExportBytes) {
   if (selected.response.sessionID !== session.value) {
     return error("SESSION_EXPORT_FAILED", "The exported response belongs to a different OpenCode session.");
   }
-  if (!ALLOWED_TARGET_ROLES.has(selected.response.role)) {
+  if (!allowedRoles.has(selected.response.role)) {
     return error(
       "UNSUPPORTED_WORKER_ROLE",
-      `Herdr target ${target} completed as unsupported agent role ${selected.response.role ?? "unknown"}.`,
+      `Herdr target ${target} completed as role ${selected.response.role ?? "unknown"}, which is not retrievable by ${allowedRolesName(allowedRoles)}.`,
     );
   }
   return selected;
+}
+
+function allowedRolesName(allowedRoles) {
+  for (const [agent, roles] of RESPONSE_MATRIX) {
+    if (roles === allowedRoles) return agent;
+  }
+  return "this caller";
 }
 
 async function exportSession(sessionID, run, signal, maxExportBytes) {
@@ -311,7 +334,8 @@ export function createResponseService(options = {}) {
   }
 
   return async function retrieve(args, context) {
-    if (!ALLOWED_CALLERS.has(context?.agent)) {
+    const allowedRoles = RESPONSE_MATRIX.get(context?.agent);
+    if (!allowedRoles) {
       return error("UNAUTHORIZED_AGENT", `Agent ${context?.agent ?? "unknown"} may not retrieve worker responses.`);
     }
     const pageSize = normalizePageBytes(args.maxBytes);
@@ -323,7 +347,7 @@ export function createResponseService(options = {}) {
     if (args.target) {
       const valid = validateTarget(args.target);
       if (!valid.ok) return valid;
-      const selected = await resolveInitialResponse(args.target, run, context.abort, maxExportBytes);
+      const selected = await resolveInitialResponse(args.target, run, context.abort, maxExportBytes, allowedRoles);
       if (!selected.ok) return selected;
       return makePage({
         response: selected.response,
@@ -344,7 +368,7 @@ export function createResponseService(options = {}) {
     if (
       pinned.response.sessionID !== decoded.payload.sessionID ||
       pinned.response.role !== decoded.payload.role ||
-      !ALLOWED_TARGET_ROLES.has(pinned.response.role) ||
+      !allowedRoles.has(pinned.response.role) ||
       sha256(Buffer.from(pinned.response.text, "utf8")) !== decoded.payload.digest
     ) {
       return error("MESSAGE_CHANGED", "The pinned worker response changed after pagination began.");

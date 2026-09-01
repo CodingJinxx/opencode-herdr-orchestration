@@ -40,36 +40,41 @@ function repository(branch = "feature") {
   return { cwd, sha: git(cwd, "rev-parse", "HEAD") };
 }
 
-test("allows ordinary users and shepherd-build", () => {
+test("allows ordinary users without an orchestration mode", () => {
   const { cwd, sha } = repository();
   const update = `refs/heads/feature ${sha} refs/heads/feature ${"0".repeat(40)}\n`;
   assert.equal(runHook(cwd, "none", update).status, 0);
-  assert.equal(runHook(cwd, "build", update).status, 0);
 });
 
-test("denies all worker and reviewer pushes", () => {
+test("denies shepherd and all flock pushes; final delivery belongs to the governor", () => {
   const { cwd, sha } = repository();
   const update = `refs/heads/feature ${sha} refs/heads/feature ${"0".repeat(40)}\n`;
-  for (const mode of ["sheep-build", "sheep-plan", "review"]) {
-    assert.equal(runHook(cwd, mode, update).status, 1);
+  for (const mode of ["shepherd", "sheepdog", "grazer", "sheep", "shearer"]) {
+    const result = runHook(cwd, mode, update);
+    assert.equal(result.status, 1, `${mode} must not push`);
+    assert.match(result.stderr, /final delivery belongs to the shepherd-governor/);
   }
 });
 
-test("allows plan to push only its current same-named non-protected branch", () => {
+test("allows governor to push only its current same-named non-protected branch", () => {
   const { cwd, sha } = repository("feature");
   const allowed = `refs/heads/feature ${sha} refs/heads/feature ${"0".repeat(40)}\n`;
   const wrongDestination = `refs/heads/feature ${sha} refs/heads/other ${"0".repeat(40)}\n`;
-  assert.equal(runHook(cwd, "plan", allowed).status, 0);
-  assert.equal(runHook(cwd, "plan", wrongDestination).status, 1);
+  const wrongSource = `refs/heads/other ${sha} refs/heads/feature ${"0".repeat(40)}\n`;
+  const deletion = `refs/heads/feature ${"0".repeat(40)} refs/heads/feature ${"0".repeat(40)}\n`;
+  assert.equal(runHook(cwd, "governor", allowed).status, 0);
+  assert.equal(runHook(cwd, "governor", wrongDestination).status, 1);
+  assert.equal(runHook(cwd, "governor", wrongSource).status, 1);
+  assert.equal(runHook(cwd, "governor", deletion).status, 1);
 });
 
-test("denies protected and configured protected planning branches", () => {
+test("denies protected and configured protected governor branches", () => {
   const main = repository("main");
   const mainUpdate = `refs/heads/main ${main.sha} refs/heads/main ${"0".repeat(40)}\n`;
-  assert.equal(runHook(main.cwd, "plan", mainUpdate).status, 1);
+  assert.equal(runHook(main.cwd, "governor", mainUpdate).status, 1);
 
   const release = repository("release");
   git(release.cwd, "config", "--add", "orchestration.protectedBranch", "release");
   const releaseUpdate = `refs/heads/release ${release.sha} refs/heads/release ${"0".repeat(40)}\n`;
-  assert.equal(runHook(release.cwd, "plan", releaseUpdate).status, 1);
+  assert.equal(runHook(release.cwd, "governor", releaseUpdate).status, 1);
 });
