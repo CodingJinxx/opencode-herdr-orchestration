@@ -13,11 +13,11 @@ There is exactly **one conceptual Shepherd: the human operator**. The Shepherd o
 The Shepherd works through two **technical phases**, each a registered agent:
 
 - `shepherd` — the **planning** phase. Researches the repository through read-only workers and presents implementation-ready plans. It never implements.
-- `shepherd-governor` — the **governance** phase. Approves plans by taking over the session, contracts bounded work, enforces deterministic validation and independent review, and owns everything remote: pushes, merges, PRs, and delivery.
+- `shepherd-governor` — the **governance** phase. Approves plans by taking over the session, contracts bounded work, judges semantics — integrated results, review verdicts, and escalations — and owns everything remote: pushes, merges, PRs, and delivery.
 
 The **Flock** is the bounded workforce herded under those phases:
 
-- `sheepdog` — herds the working flock: drives worker delegation, watches progress, interrupts genuinely stuck workers, and performs local integration of worker output under the governor's contracts.
+- `sheepdog` — herds the working flock: prepares worker branches and worktrees, drives worker delegation, watches progress, retries and re-contracts leaves, runs deterministic validation, selects the shearer review tier, recovers conflicts by re-scoping ownership, and performs local integration of worker output under the governor's contracts.
 - `grazer` — read-only research workers that graze the repository for evidence.
 - `sheep` — bounded implementation workers that produce verified local commits.
 - `shearer-low` / `shearer-medium` — independent read-only reviewers.
@@ -58,7 +58,7 @@ Shepherd (conceptual — the human operator, one per flock)
 
 Model tiers are deliberate. The two shepherd-phase agents run on the active strong model and inherit its reasoning behavior, because planning and governance are the judgment-heavy work. Flock workers run on a fast, cheap model because their tasks are bounded and their outputs are validated. Shearers run a dedicated independent model at fixed `low` and `medium` reasoning so review is never the same model grading its own family's homework.
 
-The governor chooses `shearer-low` for localized mechanical changes with strong deterministic coverage. It chooses `shearer-medium` for security, architecture, migrations, public APIs, deployment, concurrency, cross-component work, weak coverage, or material uncertainty.
+Sheepdog chooses `shearer-low` for localized mechanical changes with strong deterministic coverage. It chooses `shearer-medium` for security, architecture, migrations, public APIs, deployment, concurrency, cross-component work, weak coverage, or material uncertainty.
 
 ## Governing controls
 
@@ -85,10 +85,11 @@ Status: PROPOSED
 
 Worker replies are keyword-prefixed structured messages with two distinct channels:
 
-- **Acknowledgement replies** open a worker's first response to a task contract: `ACK` (contract accepted, work starting), `CORRECT` (contract must be corrected first), `REPLAN` (contract conflicts with the approved plan or repository evidence), or `STOP` (blocked outright).
+- **Acknowledgement replies** open a coordinator's first response to a task contract: `ACK` (contract accepted, work starting), `CORRECT` (contract must be corrected first), `REPLAN` (contract conflicts with the approved plan or repository evidence), or `STOP` (blocked outright). Only the sheepdog — a squad lead, not a leaf — sends an acknowledgement turn, and only to the governor.
+- **Leaf workers work directly.** Grazer, sheep, and shearers start their assignments without an acknowledgement turn. If a leaf cannot start, its first reply begins with `CORRECT`, `REPLAN`, or `STOP`.
 - **Milestone replies** report completed milestones: `CONTINUE` (ready for the next milestone), `CORRECT` (defects need correction within the current task), `REPLAN` (evidence invalidates the plan; escalation for re-planning), `STOP` (blocked after a milestone), or `FINALIZE` (all milestones complete, final report follows).
 
-`ACK` confirms receipt only and is never milestone progress; `FINALIZE` closes a task and is never an acknowledgement. `CORRECT`, `REPLAN`, and `STOP` are legal on either channel.
+`FINALIZE` closes a task and is never an acknowledgement. `CORRECT`, `REPLAN`, and `STOP` are legal on either channel.
 
 ### No chain of thought
 
@@ -98,7 +99,7 @@ This keeps delegation bounded, keeps review independent, and keeps a shepherd-ph
 
 ### Deterministic validation
 
-Before requesting semantic review, the governor runs or delegates deterministic repository-native checks (the repository's own check and test commands). Shearers judge semantics and defects; deterministic coverage is confirmed first so review cycles are never spent discovering what a test would have caught.
+Before requesting semantic review, sheepdog runs or delegates deterministic repository-native checks (the repository's own check and test commands) and owns retrying deterministic failures back to the responsible sheep. Shearers judge semantics and defects; deterministic coverage is confirmed first so review cycles are never spent discovering what a test would have caught.
 
 ### Review
 
@@ -116,16 +117,16 @@ Task contracts carry explicit `escalate_if` conditions. Flock workers must escal
 
 ### Local integration and conflict delegation
 
-The governor prepares each parallel `sheep` worker a dedicated branch and worktree with non-overlapping ownership and an explicit integration order. The sheepdog performs local integration of worker output under the governor's contracts, using a narrow merge and cherry-pick lifecycle (`git merge --ff-only`, `git merge --no-ff --no-edit`, `git cherry-pick`, and their continue/abort/quit forms); the governor owns the result and resolves whatever integration surfaces: mechanical drift is reported as deviations, and real conflicts are resolved by re-scoping ownership or issuing bounded recovery tasks to the responsible sheep. No flock role pushes, opens PRs, or delivers; all integration stays local until the delivery authority pushes.
+Sheepdog owns the execution mechanics end to end: it prepares each parallel `sheep` worker a dedicated branch and worktree with non-overlapping ownership and an explicit integration order, performs local integration of worker output under the governor's contracts using a narrow merge and cherry-pick lifecycle (`git merge --ff-only`, `git merge --no-ff --no-edit`, `git cherry-pick`, and their continue/abort/quit forms), and owns conflict recovery: on any conflict it aborts immediately, re-inspects, recovers by re-scoping ownership or issuing bounded recovery tasks to the responsible sheep, and escalates when conflicts invalidate the plan, repeat, or exceed its authority. Sheepdog never hand-edits a conflicted file. The governor judges the result semantically — mechanical drift is reported as deviations, and it returns defects to sheepdog rather than editing implementation itself. No flock role pushes, opens PRs, or delivers; all integration stays local until the delivery authority pushes.
 
 ## State storage
 
 All durable orchestration state lives outside agent memory and plugin process state, in two places:
 
-- **The constrained orchestration state API.** Four plugin tools store and retrieve Markdown artifacts with JSON frontmatter under the repository's shared Git common directory: `herdr_plan_write` for plan artifacts (shepherd and shepherd-governor), `herdr_plan_read` for plan artifacts (shepherd, shepherd-governor, and sheepdog), and `herdr_execution_write` and `herdr_execution_read` for execution artifacts (sheepdog). Sheepdog may read the authoritative plan but never write one; plan authorship stays with the shepherd phases. Artifacts live at `<git-common-dir>/herdr/plans/<planId>.md` and `<git-common-dir>/herdr/executions/<planId>.md`. Writes are atomic; the service invokes only read-only `git rev-parse`; Markdown bodies are capped at 1 MiB; plan IDs are 1–64 characters of letters, digits, dot, underscore, or hyphen.
+- **The constrained orchestration state API.** Four plugin tools store and retrieve Markdown artifacts with JSON frontmatter under the repository's shared Git common directory: `herdr_plan_write` for plan artifacts (the planning shepherd only), `herdr_plan_read` for plan artifacts (shepherd, shepherd-governor, and sheepdog), and `herdr_execution_write` and `herdr_execution_read` for execution artifacts (sheepdog). Sheepdog and the governor may read the authoritative plan but never write one; plan authorship stays with the planning shepherd. Artifacts live at `<git-common-dir>/herdr/plans/<planId>.md` and `<git-common-dir>/herdr/executions/<planId>.md`. Writes are atomic; the service invokes only read-only `git rev-parse`; Markdown bodies are capped at 1 MiB; plan IDs are 1–64 characters of letters, digits, dot, underscore, or hyphen.
 - **Git history.** Shepherd-phase agents may commit intended Markdown planning artifacts locally, and worker output is a verified local commit; progress is Git history, reviewable and revertable.
 
-Every worktree the governor creates — including worktrees created from other worktrees — is a **peer that shares the same Git common repository**, never a nested checkout. Because the state API stores artifacts under the common directory, a plan written in one worktree governs workers in all of them, and orchestration state survives session ends, process restarts, and machine reboots. Separate clones never share this state.
+Every worker worktree sheepdog creates — including worktrees created from other worktrees — is a **peer that shares the same Git common repository**, never a nested checkout. Because the state API stores artifacts under the common directory, a plan written in one worktree governs workers in all of them, and orchestration state survives session ends, process restarts, and machine reboots. Separate clones never share this state.
 
 Everything not stored this way is explicitly ephemeral: `SHEPHERD_MODE` is injected per OpenCode session and dies with the session; response cursors are HMAC-signed with a per-plugin-process secret, expire after six hours, and do not survive a restart of the shepherd's OpenCode plugin process.
 

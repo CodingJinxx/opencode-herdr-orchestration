@@ -205,7 +205,7 @@ test("registers the four constrained state tools", async () => {
   }
 });
 
-test("grants plan state tools to the shepherd phases and execution state tools to sheepdog only", async () => {
+test("grants plan writes to the planning shepherd, plan reads to the governor and sheepdog, and execution state tools to sheepdog only", async () => {
   const repo = stateRepository();
   const hooks = await plugin({}, { state: { cwd: repo.cwd } });
   const execute = (name, agent, args) =>
@@ -222,11 +222,12 @@ test("grants plan state tools to the shepherd phases and execution state tools t
   assert.equal(read.ok, true);
   assert.equal(read.artifact.markdown, "# Plan\n\nImplement the state tools.\n");
 
-  const governorWrite = await execute(STATE_TOOLS.planWrite, "shepherd-governor", {
+  const deniedGovernorWrite = await execute(STATE_TOOLS.planWrite, "shepherd-governor", {
     planId: "flock-plan-02",
-    markdown: "# Contracted plan\n",
+    markdown: "# Contracts are not plans\n",
   });
-  assert.equal(governorWrite.ok, true);
+  assert.equal(deniedGovernorWrite.ok, false);
+  assert.equal(deniedGovernorWrite.error.code, "UNAUTHORIZED_AGENT");
   const governorRead = await execute(STATE_TOOLS.planRead, "shepherd-governor", { planId: "flock-plan-01" });
   assert.equal(governorRead.ok, true);
 

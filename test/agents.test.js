@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 
 import { createAgents, mergeAgent, STATE_TOOL_ACCESS } from "../src/agents.js";
 import { createStateTools, modeForAgent } from "../src/index.js";
-import { SHEEPDOG_PROMPT, SHEEP_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEPHERD_PROMPT } from "../src/prompts.js";
+import {
+  GRAZER_PROMPT,
+  SHEEPDOG_PROMPT,
+  SHEEP_PROMPT,
+  SHEARER_REVIEW_PROMPT,
+  SHEPHERD_GOVERNOR_PROMPT,
+  SHEPHERD_PROMPT,
+} from "../src/prompts.js";
 
 const OLD_ROLES = [
   "shepherd-plan",
@@ -82,13 +89,17 @@ test("applies the approved response retrieval matrix to tool permissions", () =>
 test("applies the approved state tool matrix to agent permissions", () => {
   const agents = createAgents();
 
-  for (const name of ["shepherd", "shepherd-governor"]) {
-    const permission = agents[name].permission;
-    assert.equal(permission.herdr_plan_write, "allow", `${name} may write plans`);
-    assert.equal(permission.herdr_plan_read, "allow", `${name} may read plans`);
-    assert.equal(permission.herdr_execution_write, "deny", `${name} may not write executions`);
-    assert.equal(permission.herdr_execution_read, "deny", `${name} may not read executions`);
-  }
+  const shepherd = agents.shepherd.permission;
+  assert.equal(shepherd.herdr_plan_write, "allow", "shepherd may write plans");
+  assert.equal(shepherd.herdr_plan_read, "allow", "shepherd may read plans");
+  assert.equal(shepherd.herdr_execution_write, "deny", "shepherd may not write executions");
+  assert.equal(shepherd.herdr_execution_read, "deny", "shepherd may not read executions");
+
+  const governor = agents["shepherd-governor"].permission;
+  assert.equal(governor.herdr_plan_write, "deny", "governor may not write plans");
+  assert.equal(governor.herdr_plan_read, "allow", "governor may read plans");
+  assert.equal(governor.herdr_execution_write, "deny", "governor may not write executions");
+  assert.equal(governor.herdr_execution_read, "deny", "governor may not read executions");
 
   const sheepdog = agents.sheepdog.permission;
   assert.equal(sheepdog.herdr_plan_read, "allow", "sheepdog may read the authoritative plan");
@@ -132,7 +143,7 @@ test("pins shearer variants to GPT-5.6 Terra", () => {
   assert.equal(agents["shearer-medium"].variant, "medium");
 });
 
-test("governor is the execution authority on the shepherd model, not a reviewer", () => {
+test("governor is the semantic authority on the shepherd model, not a reviewer", () => {
   const agents = createAgents({ shepherdModel: "custom/shepherd" });
   const governor = agents["shepherd-governor"];
   assert.equal(governor.model, "custom/shepherd");
@@ -142,11 +153,67 @@ test("governor is the execution authority on the shepherd model, not a reviewer"
   assert.equal(bash["git merge*"], "allow");
   assert.equal(bash["gh pr create*"], "allow");
   assert.equal(bash["git push --force*"], "deny");
+  assert.equal(bash["git commit --amend*"], "deny");
+  assert.equal(bash["git commit *--amend*"], "deny");
   assert.equal(bash["*"], "deny");
   assert.match(governor.prompt, /You are not a reviewer/);
   assert.match(governor.prompt, /never perform semantic review yourself/);
   assert.doesNotMatch(governor.prompt, /exactly one verdict/);
   assert.match(governor.prompt, /final delivery/);
+});
+
+test("governor reads plans but never writes them and leaves worktrees to sheepdog", () => {
+  const agents = createAgents();
+  const governor = agents["shepherd-governor"];
+  const bash = governor.permission.bash;
+  assert.equal(bash["herdr worktree create*"], "deny");
+  assert.equal(bash["herdr worktree open*"], "deny");
+  assert.equal(bash["herdr worktree remove*"], "deny");
+  assert.equal(bash["git worktree list*"], "allow");
+  assert.equal(bash["git worktree add*"], "deny");
+  assert.equal(bash["git worktree remove*"], "deny");
+  assert.equal(bash["git worktree prune*"], "deny");
+  assert.match(governor.prompt, /herdr_plan_read/);
+  assert.doesNotMatch(governor.prompt, /herdr_plan_write/);
+  assert.match(governor.prompt, /never write one/);
+  assert.match(governor.prompt, /Sheepdog owns worker worktrees/);
+});
+
+test("sheepdog owns worker worktrees through the Herdr worktree lifecycle", () => {
+  const agents = createAgents();
+  const sheepdog = agents.sheepdog;
+  const bash = sheepdog.permission.bash;
+  assert.equal(bash["herdr worktree create *"], "allow");
+  assert.equal(bash["herdr worktree open *"], "allow");
+  assert.equal(bash["herdr worktree remove --workspace *"], "allow");
+  assert.equal(bash["herdr worktree remove * --force*"], "deny");
+  assert.equal(bash["git worktree*"], "deny");
+  assert.match(sheepdog.prompt, /Prepare each sheep's branch and worktree yourself/);
+  assert.match(sheepdog.prompt, /peers sharing the same Git common repository/);
+  assert.match(sheepdog.prompt, /never nest a worker checkout/);
+  assert.match(sheepdog.prompt, /never force removal/);
+});
+
+test("sheepdog owns validation, review tiers, retries, and conflict recovery", () => {
+  const { prompt } = createAgents().sheepdog;
+  assert.match(prompt, /Run or delegate the repository's deterministic checks before spending a semantic review cycle/);
+  assert.match(prompt, /Choose the shearer tier for each review/);
+  assert.match(prompt, /shearer-low for localized mechanical changes/);
+  assert.match(prompt, /shearer-medium for security/);
+  assert.match(prompt, /You own leaf retries/);
+  assert.match(prompt, /recover by re-scoping ownership and issuing bounded recovery contracts/);
+  assert.match(prompt, /escalate to shepherd-governor when conflicts invalidate the plan/);
+  assert.match(prompt, /hand-resolve conflicts/);
+  assert.doesNotMatch(prompt, /prepared by shepherd-governor/);
+});
+
+test("shepherd and sheepdog never amend commits", () => {
+  const agents = createAgents();
+  assert.equal(agents.shepherd.permission.bash["git commit --amend*"], "deny");
+  assert.equal(agents.shepherd.permission.bash["git commit * --amend*"], "deny");
+  assert.equal(agents.sheepdog.permission.bash["git commit --amend*"], "deny");
+  assert.equal(agents.sheepdog.permission.bash["git commit * --amend*"], "deny");
+  assert.match(SHEEP_PROMPT, /never commit with --no-verify or --amend/);
 });
 
 test("shepherd plans without delivery authority", () => {
@@ -203,6 +270,8 @@ test("hardens sheep against Herdr, GitHub, remote, and destructive Git operation
     "git branch -d*",
     "git commit --no-verify*",
     "git commit *--no-verify*",
+    "git commit --amend*",
+    "git commit *--amend*",
     "*;*",
     "*&&*",
     "*||*",
@@ -241,10 +310,11 @@ test("restricts sheepdog to the clean local merge and cherry-pick lifecycle", ()
     "git switch*",
     "git commit --no-verify*",
     "git commit * --no-verify*",
+    "git commit --amend*",
+    "git commit * --amend*",
     "git merge *--no-verify*",
     "git worktree*",
-    "herdr worktree create*",
-    "herdr worktree remove*",
+    "herdr worktree remove * --force*",
     "*;*",
   ]) {
     assert.equal(bash[denied], "deny", `${denied} must be denied for sheepdog`);
@@ -297,13 +367,12 @@ test("preserves critical orchestration behavior in the tiered prompts", () => {
   assert.match(SHEPHERD_PROMPT, /never nest a worker checkout/);
   assert.match(SHEPHERD_PROMPT, /Selecting shepherd-governor is approval/);
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /peers sharing the same Git common repository/);
-  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never nest a worker checkout/);
-  assert.match(SHEPHERD_GOVERNOR_PROMPT, /You are not a reviewer/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never nests a worker checkout/);
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /dedicated branches and worktrees/);
-  assert.match(SHEEPDOG_PROMPT, /own prepared branch and worktree with non-overlapping ownership/);
   assert.match(SHEEPDOG_PROMPT, /read the authoritative plan directly with herdr_plan_read/);
   assert.match(SHEEPDOG_PROMPT, /Before acknowledging any task contract/);
   assert.match(SHEEPDOG_PROMPT, /never rely on a secondhand summary of the plan/);
+  assert.match(SHEEPDOG_PROMPT, /Plan artifacts are read-only for you/);
 });
 
 test("prompt spawn lists mirror the approved spawn matrix", () => {
@@ -313,19 +382,33 @@ test("prompt spawn lists mirror the approved spawn matrix", () => {
   assert.deepEqual(spawns(SHEEPDOG_PROMPT), ["grazer", "sheep", "shearer-low", "shearer-medium"]);
 });
 
-test("separates acknowledgement replies from post-milestone replies", () => {
-  assert.match(SHEPHERD_PROMPT, /acknowledgement reply/);
-  assert.match(SHEPHERD_PROMPT, /post-milestone reply/);
-  assert.match(SHEPHERD_PROMPT, /ACK confirms receipt only and is never milestone progress/);
-  assert.match(SHEPHERD_PROMPT, /FINALIZE closes a task and is never an acknowledgement/);
-  assert.match(SHEPHERD_GOVERNOR_PROMPT, /FINALIZE closes a task and is never an acknowledgement/);
-  assert.match(SHEEPDOG_PROMPT, /FINALIZE closes a task and is never an acknowledgement/);
-  for (const keyword of ["ACK", "CONTINUE", "CORRECT", "REPLAN", "STOP", "FINALIZE"]) {
+test("separates leaf work from coordinator acknowledgement and milestone replies", () => {
+  assert.match(SHEPHERD_PROMPT, /Leaf workers work directly/);
+  assert.match(SHEPHERD_PROMPT, /never send an acknowledgement turn/);
+  assert.doesNotMatch(SHEPHERD_PROMPT, /\bACK\b/);
+  for (const keyword of ["CORRECT", "REPLAN", "STOP"]) {
     assert.match(SHEPHERD_PROMPT, new RegExp(`\\b${keyword} - `));
+  }
+  assert.match(SHEPHERD_PROMPT, /FINALIZE followed by the findings/);
+  assert.doesNotMatch(SHEPHERD_PROMPT, /\bCONTINUE\b/);
+
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /Sheepdog acknowledges its task contract/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /Leaf workers work directly without an acknowledgement turn/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /FINALIZE closes a task and is never an acknowledgement/);
+  for (const keyword of ["ACK", "CONTINUE", "CORRECT", "REPLAN", "STOP", "FINALIZE"]) {
     assert.match(SHEPHERD_GOVERNOR_PROMPT, new RegExp(`\\b${keyword} - `));
   }
-  for (const prompt of [SHEEP_PROMPT, SHEEPDOG_PROMPT]) {
-    assert.match(prompt, /acknowledgement keyword: ACK, CORRECT, REPLAN, or STOP/);
-    assert.match(prompt, /CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE/);
+
+  assert.match(SHEEPDOG_PROMPT, /Leaves work directly from their task contracts and never send an acknowledgement turn/);
+  assert.match(SHEEPDOG_PROMPT, /FINALIZE closes a task and is never an acknowledgement/);
+  assert.match(SHEEPDOG_PROMPT, /acknowledgement keyword: ACK, CORRECT, REPLAN, or STOP/);
+  assert.match(SHEEPDOG_PROMPT, /CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE/);
+
+  for (const prompt of [GRAZER_PROMPT, SHEEP_PROMPT, SHEARER_REVIEW_PROMPT]) {
+    assert.match(prompt, /do not send an acknowledgement turn/);
+    assert.doesNotMatch(prompt, /\bACK\b/);
   }
+  assert.match(SHEEP_PROMPT, /CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE/);
+  assert.match(GRAZER_PROMPT, /FINALIZE followed by the findings/);
+  assert.match(SHEARER_REVIEW_PROMPT, /FINALIZE followed by exactly one verdict/);
 });

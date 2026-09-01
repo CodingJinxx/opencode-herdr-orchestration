@@ -67,11 +67,11 @@ const markdownOnly = {
   "**/*.md": "allow",
 };
 
-// Constrained orchestration state tools. The shepherd phases author plan
-// artifacts; sheepdog reads the authoritative plan and records and reads
-// execution artifacts. This matrix is the single source of truth for both the
-// plugin-level tool enforcement (src/index.js) and the per-agent permission
-// entries below.
+// Constrained orchestration state tools. The planning shepherd authors plan
+// artifacts; shepherd-governor and sheepdog read the authoritative plan, and
+// sheepdog records and reads execution artifacts. This matrix is the single
+// source of truth for both the plugin-level tool enforcement (src/index.js)
+// and the per-agent permission entries below.
 export const STATE_TOOLS = Object.freeze({
   planWrite: "herdr_plan_write",
   planRead: "herdr_plan_read",
@@ -81,7 +81,7 @@ export const STATE_TOOLS = Object.freeze({
 
 export const STATE_TOOL_ACCESS = Object.freeze(
   new Map([
-    [STATE_TOOLS.planWrite, new Set(["shepherd", "shepherd-governor"])],
+    [STATE_TOOLS.planWrite, new Set(["shepherd"])],
     [STATE_TOOLS.planRead, new Set(["shepherd", "shepherd-governor", "sheepdog"])],
     [STATE_TOOLS.executionWrite, new Set(["sheepdog"])],
     [STATE_TOOLS.executionRead, new Set(["sheepdog"])],
@@ -97,6 +97,7 @@ function stateToolPermissions(allowedTools) {
 }
 
 const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
+const GOVERNOR_STATE_TOOLS = [STATE_TOOLS.planRead];
 const SHEEPDOG_STATE_TOOLS = [
   STATE_TOOLS.planRead,
   STATE_TOOLS.executionWrite,
@@ -134,13 +135,12 @@ const SHEEPDOG_DENIALS = {
   "git stash*": "deny",
   "git clean*": "deny",
   "git worktree*": "deny",
-  "herdr worktree create*": "deny",
-  "herdr worktree open*": "deny",
-  "herdr worktree remove*": "deny",
   "git branch -D*": "deny",
   "git branch -d*": "deny",
   "git commit --no-verify*": "deny",
   "git commit * --no-verify*": "deny",
+  "git commit --amend*": "deny",
+  "git commit * --amend*": "deny",
   "git merge *--no-verify*": "deny",
 };
 
@@ -169,6 +169,8 @@ const SHEEP_DENIALS = {
   "git branch -d*": "deny",
   "git commit --no-verify*": "deny",
   "git commit *--no-verify*": "deny",
+  "git commit --amend*": "deny",
+  "git commit *--amend*": "deny",
 };
 
 function mergeRecord(base, override) {
@@ -233,6 +235,8 @@ export function createAgents(options = {}) {
           "git push*": "deny",
           "git commit --no-verify*": "deny",
           "git commit * --no-verify*": "deny",
+          "git commit --amend*": "deny",
+          "git commit * --amend*": "deny",
           "git branch -D*": "deny",
           "git branch -d*": "deny",
           "git worktree remove * --force*": "deny",
@@ -255,7 +259,7 @@ export function createAgents(options = {}) {
         edit: markdownOnly,
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
-        ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
+        ...stateToolPermissions(GOVERNOR_STATE_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -267,7 +271,7 @@ export function createAgents(options = {}) {
           "git branch*": "allow",
           "git rev-parse*": "allow",
           "git merge-base*": "allow",
-          "git worktree*": "allow",
+          "git worktree list*": "allow",
           "git add *.md": "allow",
           "git add **/*.md": "allow",
           "git commit*": "allow",
@@ -282,10 +286,19 @@ export function createAgents(options = {}) {
           "git push *--delete*": "deny",
           "git push *--no-verify*": "deny",
           "git commit *--no-verify*": "deny",
+          "git commit --amend*": "deny",
+          "git commit *--amend*": "deny",
           "git merge *--no-verify*": "deny",
           "git branch -D*": "deny",
           "git branch -d*": "deny",
+          "git worktree add*": "deny",
+          "git worktree remove*": "deny",
+          "git worktree move*": "deny",
+          "git worktree prune*": "deny",
           "git worktree remove * --force*": "deny",
+          "herdr worktree create*": "deny",
+          "herdr worktree open*": "deny",
+          "herdr worktree remove*": "deny",
           "gh pr create*": "allow",
           "gh pr view*": "allow",
           "gh pr checks*": "allow",
@@ -300,7 +313,7 @@ export function createAgents(options = {}) {
       model: sheepdogModel,
       ...(sheepdogVariant ? { variant: sheepdogVariant } : {}),
       description:
-        "Leads execution squads of grazer, sheep, and shearers and performs clean local integration with merge and cherry-pick lifecycle commands only.",
+        "Leads execution squads of grazer, sheep, and shearers, prepares worker branches and worktrees, owns validation, review tiers, retries, and conflict recovery, and performs clean local integration with merge and cherry-pick lifecycle commands only.",
       prompt: SHEEPDOG_PROMPT,
       permission: {
         read: "allow",
