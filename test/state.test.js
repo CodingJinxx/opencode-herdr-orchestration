@@ -260,8 +260,13 @@ test("fails atomically and retains prior artifact bytes when rename fails", asyn
     get(targetFs, key) {
       if (key === "renameSync") {
         return (...args) => {
-          renameCalls += 1;
-          throw Object.assign(new Error("simulated rename failure"), { code: "EPERM" });
+          // Only the artifact promotion rename fails; the migration lease
+          // protocol's own lock renames are not the behavior under test.
+          if (String(args[1]).endsWith(".md")) {
+            renameCalls += 1;
+            throw Object.assign(new Error("simulated rename failure"), { code: "EPERM" });
+          }
+          return Reflect.get(targetFs, key)(...args);
         };
       }
       return Reflect.get(targetFs, key);
@@ -511,6 +516,98 @@ test("recovers an interrupted migration by rolling the staged promotion forward"
   assert.equal(fs.readFileSync(path.join(legacyStateRoot(repo), "plans", `${planId}.md`), "utf8"), planBytes, "the legacy source is preserved");
 });
 
+test("completes recovery when the staged bytes match the canonical target", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "settled-recovery";
+  const sameBytes = legacyArtifact(repo, "plan", planId, "# Already promoted\n");
+  const canonicalDirectory = path.join(stateRoot(repo), "plans");
+  fs.mkdirSync(canonicalDirectory, { recursive: true });
+  const target = path.join(canonicalDirectory, `${planId}.md`);
+  fs.writeFileSync(target, sameBytes, "utf8");
+  const temp = path.join(canonicalDirectory, `${planId}.md.999.abcdef.migrating`);
+  fs.writeFileSync(temp, sameBytes, "utf8");
+  const journalPath = path.join(stateRoot(repo), ".migration-journal");
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify([{ artifactType: "plan", planId, temp, target, stagedAt: FIXED_TIME.toISOString() }], null, 2),
+    "utf8",
+  );
+
+  const read = await state.readPlan(planId);
+  assert.equal(read.ok, true);
+  assert.equal(read.artifact.markdown, "# Already promoted\n");
+  assert.equal(fs.existsSync(temp), false, "the identical staged temp was dropped");
+  assert.equal(fs.readFileSync(journalPath, "utf8").trim(), "[]", "the journal was cleared after recovery");
+});
+
+test("keeps staged evidence and fails closed when recovery would overwrite a divergent canonical artifact", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "contested-recovery";
+  const stagedBytes = legacyArtifact(repo, "plan", planId, "# Staged version\n");
+  const canonicalBytes = legacyArtifact(repo, "plan", planId, "# Canonical version\n");
+  const canonicalDirectory = path.join(stateRoot(repo), "plans");
+  fs.mkdirSync(canonicalDirectory, { recursive: true });
+  const target = path.join(canonicalDirectory, `${planId}.md`);
+  fs.writeFileSync(target, canonicalBytes, "utf8");
+  const temp = path.join(canonicalDirectory, `${planId}.md.999.abcdef.migrating`);
+  fs.writeFileSync(temp, stagedBytes, "utf8");
+  const journalPath = path.join(stateRoot(repo), ".migration-journal");
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify([{ artifactType: "plan", planId, temp, target, stagedAt: FIXED_TIME.toISOString() }], null, 2),
+    "utf8",
+  );
+
+  const read = await state.readPlan(planId);
+  assert.equal(read.ok, false);
+  assert.equal(read.error.code, "MIGRATION_CONFLICT");
+  assert.equal(read.error.retryable, false);
+  assert.deepEqual(
+    read.error.conflicts.map((conflict) => [conflict.planId, conflict.reason]),
+    [[planId, "DIVERGENT_BYTES"]],
+  );
+  assert.equal(fs.readFileSync(target, "utf8"), canonicalBytes, "the canonical artifact was not overwritten by staged bytes");
+  assert.equal(fs.readFileSync(temp, "utf8"), stagedBytes, "the staged evidence is retained");
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+  assert.equal(journal.length, 1, "the journal retains the evidence for a later resume");
+  assert.equal(journal[0].planId, planId);
+});
+
+test("leaves empty, oversized, and metadata-invalid legacy artifacts unpromoted", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const baseMetadata = (planId) => ({
+    schema: 1,
+    artifactType: "plan",
+    planId,
+    identity: repo.commonDir,
+    toplevel: repo.toplevel,
+    createdAt: FIXED_TIME.toISOString(),
+    updatedAt: FIXED_TIME.toISOString(),
+  });
+  seedLegacy(repo, "plans", "empty-legacy", `---\n${JSON.stringify(baseMetadata("empty-legacy"), null, 2)}\n---\n`);
+  seedLegacy(repo, "plans", "oversized-legacy", legacyArtifact(repo, "plan", "oversized-legacy", "x".repeat(1024 * 1024 + 1)));
+  const missingToplevel = baseMetadata("metadata-legacy");
+  delete missingToplevel.toplevel;
+  seedLegacy(repo, "plans", "metadata-legacy", `---\n${JSON.stringify(missingToplevel, null, 2)}\n---\n# Body\n`);
+
+  const read = await state.readPlan("empty-legacy");
+  assert.equal(read.ok, false);
+  assert.equal(read.error.code, "MIGRATION_CONFLICT");
+  assert.equal(read.error.retryable, false);
+  const reasons = new Map(read.error.conflicts.map((conflict) => [conflict.planId, conflict.reason]));
+  assert.equal(reasons.get("empty-legacy"), "LEGACY_INVALID_MARKDOWN", "an empty legacy body is rejected");
+  assert.equal(reasons.get("oversized-legacy"), "LEGACY_INVALID_MARKDOWN", "a legacy body above the 1 MiB cap is rejected");
+  assert.equal(reasons.get("metadata-legacy"), "LEGACY_INVALID_METADATA", "missing required metadata is rejected");
+
+  for (const planId of ["empty-legacy", "oversized-legacy", "metadata-legacy"]) {
+    assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", `${planId}.md`)), false, `${planId} was never promoted`);
+    assert.equal(fs.existsSync(path.join(legacyStateRoot(repo), "plans", `${planId}.md`)), true, `${planId} is preserved in the legacy root`);
+  }
+});
+
 test("rolls back an interrupted migration whose staged temp file is gone", async () => {
   const repo = repository();
   const state = service({ cwd: repo.cwd });
@@ -529,7 +626,7 @@ test("rolls back an interrupted migration whose staged temp file is gone", async
   assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "rolled-back-plan.md")), false);
 });
 
-test("reports a fresh foreign migration lock as busy and steals a stale one", async () => {
+test("reports a fresh foreign migration lock as busy and takes over a stale lease", async () => {
   const repo = repository();
   const state = service({ cwd: repo.cwd });
   fs.mkdirSync(stateRoot(repo), { recursive: true });
@@ -550,9 +647,87 @@ test("reports a fresh foreign migration lock as busy and steals a stale one", as
     JSON.stringify({ pid: 424242, acquiredAt: "2020-01-01T00:00:00.000Z" }),
     "utf8",
   );
-  const stolen = await state.writePlan({ planId: "locked-plan", markdown: "# After the stale lock\n" });
-  assert.equal(stolen.ok, true);
+  const takenOver = await state.writePlan({ planId: "locked-plan", markdown: "# After the stale lease\n" });
+  assert.equal(takenOver.ok, true);
   assert.equal((await state.readPlan("locked-plan")).ok, true);
+  assert.equal(fs.existsSync(lockPath), false, "the verified lease is released after the operation");
+});
+
+test("verifies lease ownership on release and preserves a lock taken over mid-operation", async () => {
+  const repo = repository();
+  const lockPath = path.join(stateRoot(repo), ".migration-lock");
+  seedLegacy(repo, "plans", "lease-plan", legacyArtifact(repo, "plan", "lease-plan", "# Leased plan\n"));
+  let swapped = false;
+  const swappingFs = new Proxy(fs, {
+    get(target, key) {
+      if (key === "readdirSync") {
+        return (...args) => {
+          const result = Reflect.get(target, key)(...args);
+          // The first successful directory scan runs inside reconciliation,
+          // between lock acquisition and release: another owner takes over.
+          if (!swapped) {
+            swapped = true;
+            fs.writeFileSync(
+              lockPath,
+              JSON.stringify({ pid: 31337, token: "foreign-token", acquiredAt: FIXED_TIME.toISOString() }),
+              "utf8",
+            );
+          }
+          return result;
+        };
+      }
+      return Reflect.get(target, key);
+    },
+  });
+  const state = service({ cwd: repo.cwd, fs: swappingFs });
+
+  const written = await state.writePlan({ planId: "lease-plan", markdown: "# After takeover\n" });
+  assert.equal(written.ok, true);
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  assert.equal(lock.token, "foreign-token", "release did not delete the current owner's lock");
+  assert.equal(lock.pid, 31337);
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "lease-plan.md")), true, "the operation itself completed");
+});
+
+test("verifies the lease token on stale takeover and yields when another owner wins", async () => {
+  const repo = repository();
+  const lockPath = path.join(stateRoot(repo), ".migration-lock");
+  fs.mkdirSync(stateRoot(repo), { recursive: true });
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({ pid: 424242, token: "stale-owner", acquiredAt: "2020-01-01T00:00:00.000Z" }),
+    "utf8",
+  );
+  let raced = false;
+  const racingFs = new Proxy(fs, {
+    get(target, key) {
+      if (key === "renameSync") {
+        return (...args) => {
+          const result = Reflect.get(target, key)(...args);
+          // A concurrent owner's atomic takeover lands after ours.
+          if (!raced && args[1] === lockPath) {
+            raced = true;
+            fs.writeFileSync(
+              lockPath,
+              JSON.stringify({ pid: 31337, token: "winner-token", acquiredAt: FIXED_TIME.toISOString() }),
+              "utf8",
+            );
+          }
+          return result;
+        };
+      }
+      return Reflect.get(target, key);
+    },
+  });
+  const state = service({ cwd: repo.cwd, fs: racingFs });
+
+  const busy = await state.readPlan("contested-plan");
+  assert.equal(busy.ok, false);
+  assert.equal(busy.error.code, "MIGRATION_BUSY");
+  assert.equal(busy.error.retryable, true);
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  assert.equal(lock.token, "winner-token", "the verified winner's lease was not clobbered or deleted");
+  assert.equal(lock.pid, 31337);
 });
 
 test("reconciles an active legacy write as a conflict instead of last-writer-wins", async () => {
