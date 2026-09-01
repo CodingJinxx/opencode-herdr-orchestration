@@ -203,6 +203,7 @@ test("configures agent models while preserving plugin options and comments", () 
     shepherdModel: "provider/shepherd",
     sheepdogModel: "provider/sheepdog",
     sheepdogVariant: "medium",
+    grazerVariant: "low",
     workerModel: "provider/worker",
     workerVariant: "high",
     reviewerModel: "provider/reviewer",
@@ -213,6 +214,7 @@ test("configures agent models while preserving plugin options and comments", () 
     private: true,
     workerModel: "provider/worker",
     workerVariant: "high",
+    grazerVariant: "low",
     sheepdogModel: "provider/sheepdog",
     sheepdogVariant: "medium",
     shepherdModel: "provider/shepherd",
@@ -226,6 +228,7 @@ test("empty model choices restore package defaults", () => {
     plugin: [[entry, {
       workerModel: "custom/worker",
       workerVariant: "high",
+      grazerVariant: "medium",
       sheepdogModel: "custom/sheepdog",
       sheepdogVariant: "low",
       reviewerModel: "custom/reviewer",
@@ -235,6 +238,7 @@ test("empty model choices restore package defaults", () => {
   const updated = updateAgentModels(source, entry, {
     workerModel: "",
     workerVariant: "",
+    grazerVariant: "",
     sheepdogModel: "",
     sheepdogVariant: "",
     reviewerModel: "",
@@ -247,12 +251,14 @@ test("promotes a first-time plugin registration to model options", () => {
   const updated = updateAgentModels("{}", entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
+    grazerVariant: "high",
     workerVariant: "low",
     reviewerModel: "provider/reviewer",
   });
   assert.deepEqual(parse(updated).plugin, [[entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
+    grazerVariant: "high",
     workerVariant: "low",
     reviewerModel: "provider/reviewer",
   }]]);

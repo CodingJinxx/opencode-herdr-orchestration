@@ -230,6 +230,16 @@ test("sheepdog uses its own separate model", () => {
   assert.equal(createAgents().sheepdog.model, "litellm/glm-5.3-flash");
 });
 
+test("supports grazer-specific variant with workerVariant fallback", () => {
+  const withFallback = createAgents({ workerVariant: "high" });
+  assert.equal(withFallback.grazer.variant, "high");
+  assert.equal(withFallback.sheep.variant, "high");
+
+  const withOverride = createAgents({ workerVariant: "high", grazerVariant: "low" });
+  assert.equal(withOverride.grazer.variant, "low");
+  assert.equal(withOverride.sheep.variant, "high");
+});
+
 test("keeps workers and reviewers as leaves", () => {
   const agents = createAgents();
   for (const name of ["grazer", "sheep", "sheepdog", "shearer-low", "shearer-medium", "shepherd-governor"]) {

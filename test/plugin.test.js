@@ -58,6 +58,7 @@ test("applies configured models by agent tier", async () => {
     shepherdModel: "custom/shepherd",
     workerModel: "custom/worker",
     workerVariant: "high",
+    grazerVariant: "low",
     sheepdogModel: "custom/sheepdog",
     sheepdogVariant: "medium",
     reviewerModel: "custom/reviewer",
@@ -67,7 +68,7 @@ test("applies configured models by agent tier", async () => {
   assert.equal(config.agent.shepherd.model, "custom/shepherd");
   assert.equal(config.agent["shepherd-governor"].model, "custom/shepherd");
   assert.equal(config.agent.grazer.model, "custom/worker");
-  assert.equal(config.agent.grazer.variant, "high");
+  assert.equal(config.agent.grazer.variant, "low");
   assert.equal(config.agent.sheep.model, "custom/worker");
   assert.equal(config.agent.sheep.variant, "high");
   assert.equal(config.agent.sheepdog.model, "custom/sheepdog");

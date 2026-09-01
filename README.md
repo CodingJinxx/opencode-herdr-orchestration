@@ -259,7 +259,7 @@ npx -y opencode-herdr-orchestration@latest uninstall --with-hooks
 
 After installation or update, quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration.
 
-`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`. The sheepdog and flock worker reasoning efforts accept the provider's variant names, such as `low`, `medium`, or `high`; leaving either unset uses the model's default reasoning behavior. Shepherd-phase agents always inherit the active model and its reasoning behavior, and shearer reasoning stays fixed at `low` and `medium`.
+`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`. The sheepdog, grazer, and sheep reasoning efforts accept the provider's variant names, such as `low`, `medium`, or `high`; leaving any unset uses the model's default reasoning behavior. Shepherd-phase agents always inherit the active model and its reasoning behavior, and shearer reasoning stays fixed at `low` and `medium`.
 
 ## Manual Installation
 
@@ -359,6 +359,7 @@ Plugin tuple options can override model defaults:
         "sheepdogModel": "litellm/glm-5.3-flash",
         "sheepdogVariant": "medium",
         "workerModel": "litellm/glm-5.3-flash",
+        "grazerVariant": "low",
         "workerVariant": "medium",
         "reviewerModel": "litellm-responses/gpt-5.6-terra"
       }
@@ -367,7 +368,7 @@ Plugin tuple options can override model defaults:
 }
 ```
 
-The sheepdog has its own model and reasoning effort options, separate from the sheep workers it supervises.
+The sheepdog has its own model and reasoning effort options, and grazer reasoning can be configured separately from sheep worker reasoning.
 
 Machine-specific governance permissions and instructions can also be added declaratively without a local JavaScript wrapper:
 
