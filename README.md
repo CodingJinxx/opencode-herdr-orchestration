@@ -1,6 +1,6 @@
 # opencode-herdr-orchestration
 
-Capability-separated OpenCode agents for planning, implementation, independent review, and delivery through Herdr, organized as **Shepherd → technical phases → Flock**.
+Capability-separated OpenCode agents for planning, implementation, independent review, and delivery through Herdr, organized as **Developer → Shepherd → Flock**.
 
 This package registers the agents, provides complete structured worker-response retrieval, injects session-specific orchestration mode into shell environments, and ships a reproducible Git `pre-push` policy for new and existing repositories.
 
@@ -8,9 +8,9 @@ Requires Node.js 20 or newer when running the package CLI or tests.
 
 ## Philosophy
 
-There is exactly **one conceptual Shepherd: the human operator**. The Shepherd owns intent, product judgment, risk tolerance, and every final approval. No agent replaces the Shepherd; agents only prepare decisions for them.
+There is exactly **one Developer: the human operator**, and the Developer sits above the Shepherd. The Developer owns intent, product judgment, risk tolerance, and every final approval. No agent replaces the Developer; the Shepherd and every agent below it only prepare decisions for the Developer.
 
-The Shepherd works through two **technical phases**, each a registered agent:
+The Developer works through the Shepherd's two **technical phases**, each a registered agent:
 
 - `shepherd` — the **planning** phase. Researches the repository through read-only workers and presents implementation-ready plans. It never implements.
 - `shepherd-governor` — the **governance** phase. Approves plans by taking over the session, contracts bounded work, judges semantics — integrated results, review verdicts, and escalations — and owns everything remote: pushes, merges, PRs, and delivery.
@@ -26,12 +26,12 @@ Three invariants govern the whole system:
 
 1. **Authority flows down, never sideways or up.** Each role may mutate only what its authority permits. A worker cannot delegate beyond its assignment; a reviewer cannot mutate; the flock cannot deliver.
 2. **Results flow up through structured channels.** Shepherd-phase agents act on settled, paginated responses and committed artifacts — never on terminal scrollback, partial state, or a worker's reasoning transcript.
-3. **Approval never flows down implicitly.** Reaching a milestone never grants authority, and the Shepherd's acknowledgement of a plan is a separate, explicit control.
+3. **Approval never flows down implicitly.** Reaching a milestone never grants authority, and the Developer's acknowledgement of a plan is a separate, explicit control.
 
 ## Topology
 
 ```text
-Shepherd (conceptual — the human operator, one per flock)
+Developer (the human operator, one per flock)
 │
 ├── Planning phase: shepherd
 │   └── grazer                          read-only research
@@ -113,7 +113,7 @@ Two failed semantic review cycles for the same task escalate instead of looping 
 
 ### Escalation
 
-Task contracts carry explicit `escalate_if` conditions. Flock workers must escalate rather than guess when evidence contradicts the assignment, ownership must expand, a public API or migration changes unexpectedly, a product or architecture decision is needed, permissions block required work, or repeated attempts fail. Shepherd-phase agents resolve what repository evidence permits and surface unresolved product choices to the Shepherd — the human — for judgment. `unknown` is treated as inconclusive, never complete.
+Task contracts carry explicit `escalate_if` conditions. Flock workers must escalate rather than guess when evidence contradicts the assignment, ownership must expand, a public API or migration changes unexpectedly, a product or architecture decision is needed, permissions block required work, or repeated attempts fail. Shepherd-phase agents resolve what repository evidence permits and surface unresolved product choices to the Developer — the human — for judgment. `unknown` is treated as inconclusive, never complete.
 
 ### Local integration and conflict delegation
 
@@ -235,11 +235,11 @@ The installer:
 
 - locates the global OpenCode config directory;
 - installs an exact package version there;
-- interactively asks which models the shepherd, flock worker, and shearer reviewer roles should use when run in a terminal;
+- interactively asks which models the shepherd, sheepdog, flock worker, and shearer reviewer roles should use when run in a terminal;
 - preserves existing JSONC comments, trailing commas, plugins, and tuple options;
 - adds the stable file URL required by current OpenCode npm plugin loading;
 - creates timestamped backups of changed config and npm manifest files;
-- validates the governance agent through a short-lived OpenCode debug process;
+- validates every agent role through a short-lived OpenCode debug process;
 - never restarts or signals a running OpenCode process.
 
 The shared Git push policy remains opt-in:
@@ -259,7 +259,7 @@ npx -y opencode-herdr-orchestration@latest uninstall --with-hooks
 
 After installation or update, quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration.
 
-`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`. The flock worker reasoning effort accepts the provider's variant names, such as `low`, `medium`, or `high`; leaving it unset uses the model's default reasoning behavior. Shepherd-phase agents always inherit the active model and its reasoning behavior, and shearer reasoning stays fixed at `low` and `medium`.
+`configure-agents` updates the same model choices after installation. Press Enter to keep the displayed value, or enter `-` to restore that role's package default. Model names must include their provider prefix, such as `anthropic/claude-sonnet-4-6`. The sheepdog and flock worker reasoning efforts accept the provider's variant names, such as `low`, `medium`, or `high`; leaving either unset uses the model's default reasoning behavior. Shepherd-phase agents always inherit the active model and its reasoning behavior, and shearer reasoning stays fixed at `low` and `medium`.
 
 ## Manual Installation
 
@@ -356,6 +356,8 @@ Plugin tuple options can override model defaults:
       "opencode-herdr-orchestration",
       {
         "shepherdModel": "anthropic/claude-sonnet-4-6",
+        "sheepdogModel": "litellm/glm-5.3-flash",
+        "sheepdogVariant": "medium",
         "workerModel": "litellm/glm-5.3-flash",
         "workerVariant": "medium",
         "reviewerModel": "litellm-responses/gpt-5.6-terra"
@@ -364,6 +366,8 @@ Plugin tuple options can override model defaults:
   ]
 }
 ```
+
+The sheepdog has its own model and reasoning effort options, separate from the sheep workers it supervises.
 
 Machine-specific governance permissions and instructions can also be added declaratively without a local JavaScript wrapper:
 
