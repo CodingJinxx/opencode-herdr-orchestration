@@ -197,6 +197,7 @@ export function createAgents(options = {}) {
   const shepherdModel = options.shepherdModel;
   const workerModel = options.workerModel ?? "litellm/glm-5.3-flash";
   const workerVariant = options.workerVariant;
+  const grazerVariant = options.grazerVariant ?? workerVariant;
   const sheepdogModel = options.sheepdogModel ?? "litellm/glm-5.3-flash";
   const sheepdogVariant = options.sheepdogVariant;
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
@@ -341,7 +342,7 @@ export function createAgents(options = {}) {
     grazer: {
       mode: "primary",
       model: workerModel,
-      ...(workerVariant ? { variant: workerVariant } : {}),
+      ...(grazerVariant ? { variant: grazerVariant } : {}),
       description: "Performs read-only repository research for the shepherd, shepherd-governor, or sheepdog.",
       prompt: GRAZER_PROMPT,
       permission: {

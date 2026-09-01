@@ -34,6 +34,7 @@ const MODEL_ROLES = [
   ["shepherdModel", "Shepherd agents", "OpenCode active model", "model"],
   ["sheepdogModel", "Sheepdog agents", "litellm/glm-5.3-flash", "model"],
   ["sheepdogVariant", "Sheepdog reasoning effort", "model default", "variant"],
+  ["grazerVariant", "Grazer reasoning effort", "model default", "variant"],
   ["workerModel", "Sheep worker agents", "litellm/glm-5.3-flash", "model"],
   ["workerVariant", "Sheep worker reasoning effort", "model default", "variant"],
   ["reviewerModel", "Shearer review agents", "litellm-responses/gpt-5.6-terra", "model"],
