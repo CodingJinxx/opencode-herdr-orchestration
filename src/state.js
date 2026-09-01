@@ -178,7 +178,11 @@ export function createStateService(options = {}) {
   function canonicalizePath(value) {
     const absolute = path.isAbsolute(value) ? value : path.resolve(cwd, value);
     try {
-      return fs.realpathSync(absolute);
+      // On Windows, the regular realpath binding can preserve an 8.3 alias
+      // while the same directory is reached through its long name elsewhere.
+      // The native binding gives one identity across linked worktrees.
+      const realpath = fs.realpathSync.native ?? fs.realpathSync;
+      return realpath(absolute);
     } catch {
       return path.resolve(absolute);
     }

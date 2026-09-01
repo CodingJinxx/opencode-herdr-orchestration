@@ -39,6 +39,25 @@ function stateRoot(repo) {
   return path.join(repo.commonDir, "herdr");
 }
 
+test("normalizes Windows short paths through the native realpath binding", async () => {
+  const shortRoot = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\state-repo";
+  const longRoot = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\state-repo";
+  const realpathSync = (value) => value;
+  realpathSync.native = () => longRoot;
+
+  const state = service({
+    cwd: shortRoot,
+    path: path.win32,
+    fs: { realpathSync },
+    runGit: async (_cwd, args) => args[1] === "--git-common-dir"
+      ? `${shortRoot}\\.git\n`
+      : `${shortRoot}\n`,
+  });
+
+  const layout = await state.layout();
+  assert.deepEqual(layout, { identity: longRoot, toplevel: longRoot });
+});
+
 test("round-trips a plan artifact with stamped metadata and stable creation time", async () => {
   const repo = repository();
   const state = service({ cwd: repo.cwd });
