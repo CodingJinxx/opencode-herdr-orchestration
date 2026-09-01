@@ -217,7 +217,7 @@ test("grants plan writes to the planning shepherd, plan reads to the governor an
     markdown: "# Plan\n\nImplement the state tools.\n",
   });
   assert.equal(written.ok, true);
-  assert.equal(written.artifact.path, path.join(repo.commonDir, "herdr", "plans", "flock-plan-01.md"));
+  assert.equal(written.artifact.path, path.join(repo.commonDir, "flocky", "plans", "flock-plan-01.md"));
 
   const read = await execute(STATE_TOOLS.planRead, "shepherd", { planId: "flock-plan-01" });
   assert.equal(read.ok, true);
@@ -246,7 +246,7 @@ test("grants plan writes to the planning shepherd, plan reads to the governor an
     markdown: "# Execution\n\nSquad one integrated.\n",
   });
   assert.equal(execution.ok, true);
-  assert.equal(execution.artifact.path, path.join(repo.commonDir, "herdr", "executions", "flock-plan-01.md"));
+  assert.equal(execution.artifact.path, path.join(repo.commonDir, "flocky", "executions", "flock-plan-01.md"));
   const executionRead = await execute(STATE_TOOLS.executionRead, "sheepdog", { planId: "flock-plan-01" });
   assert.equal(executionRead.ok, true);
   assert.equal(executionRead.artifact.markdown, "# Execution\n\nSquad one integrated.\n");
@@ -296,9 +296,9 @@ test("shares state across linked worktrees but never across clones", async () =>
   assert.equal(fromClone.error.code, "NOT_FOUND");
 
   const cloneCommonDir = realpath(path.resolve(clonePath, ".git"));
-  const artifact = path.join(repo.commonDir, "herdr", "plans", "shared-01.md");
-  fs.mkdirSync(path.join(cloneCommonDir, "herdr", "plans"), { recursive: true });
-  fs.copyFileSync(artifact, path.join(cloneCommonDir, "herdr", "plans", "shared-01.md"));
+  const artifact = path.join(repo.commonDir, "flocky", "plans", "shared-01.md");
+  fs.mkdirSync(path.join(cloneCommonDir, "flocky", "plans"), { recursive: true });
+  fs.copyFileSync(artifact, path.join(cloneCommonDir, "flocky", "plans", "shared-01.md"));
   const copied = await execute(cloneHooks, STATE_TOOLS.planRead, "shepherd", { planId: "shared-01" });
   assert.equal(copied.ok, false, "a copied artifact from a foreign clone is rejected");
   assert.equal(copied.error.code, "IDENTITY_MISMATCH");
@@ -341,7 +341,7 @@ test("state tools never issue arbitrary Git metadata writes", async () => {
     );
   }
 
-  const plansDir = path.join(repo.commonDir, "herdr", "plans");
+  const plansDir = path.join(repo.commonDir, "flocky", "plans");
   assert.deepEqual(
     fs.readdirSync(plansDir).filter((entry) => entry.endsWith(".md")),
     ["safe-01.md"],

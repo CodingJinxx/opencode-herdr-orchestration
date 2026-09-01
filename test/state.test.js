@@ -40,7 +40,31 @@ function service(options = {}) {
 }
 
 function stateRoot(repo) {
+  return path.join(repo.commonDir, "flocky");
+}
+
+function legacyStateRoot(repo) {
   return path.join(repo.commonDir, "herdr");
+}
+
+function legacyArtifact(repo, type, planId, markdown) {
+  const metadata = {
+    schema: 1,
+    artifactType: type,
+    planId,
+    identity: repo.commonDir,
+    toplevel: repo.toplevel,
+    createdAt: FIXED_TIME.toISOString(),
+    updatedAt: FIXED_TIME.toISOString(),
+  };
+  return `---\n${JSON.stringify(metadata, null, 2)}\n---\n${markdown}`;
+}
+
+function seedLegacy(repo, directory, planId, text) {
+  const target = path.join(legacyStateRoot(repo), directory, `${planId}.md`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, text, "utf8");
+  return target;
 }
 
 test("normalizes Windows short paths through the native realpath binding", async () => {
@@ -362,4 +386,205 @@ test("exposes artifact type constants used by generic write and read", async () 
   assert.equal(execution.ok, true);
   assert.equal((await state.readArtifact(ARTIFACT_TYPES.PLAN, "generic")).artifact.metadata.artifactType, "plan");
   assert.equal((await state.readArtifact(ARTIFACT_TYPES.EXECUTION, "generic")).artifact.metadata.artifactType, "execution");
+});
+
+test("migrates legacy-only artifacts into the canonical flocky root and preserves them in place", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "developer-steering-flocky-state-20260901-01";
+  const planBytes = legacyArtifact(repo, "plan", planId, "# Steering state\n\nPreserved across the migration.\n");
+  const executionBytes = legacyArtifact(repo, "execution", planId, "# Legacy execution log\n");
+  seedLegacy(repo, "plans", planId, planBytes);
+  seedLegacy(repo, "executions", planId, executionBytes);
+  assert.equal(fs.existsSync(stateRoot(repo)), false, "no canonical root exists before the first operation");
+
+  const read = await state.readPlan(planId);
+  assert.equal(read.ok, true);
+  assert.equal(read.artifact.markdown, "# Steering state\n\nPreserved across the migration.\n");
+  assert.equal(
+    fs.readFileSync(path.join(stateRoot(repo), "plans", `${planId}.md`), "utf8"),
+    planBytes,
+    "the canonical copy carries the exact legacy bytes",
+  );
+  assert.equal(
+    fs.readFileSync(path.join(stateRoot(repo), "executions", `${planId}.md`), "utf8"),
+    executionBytes,
+  );
+  assert.equal(fs.existsSync(path.join(legacyStateRoot(repo), "plans", `${planId}.md`)), true, "the legacy artifact is never auto-deleted");
+  assert.equal(fs.existsSync(path.join(legacyStateRoot(repo), "executions", `${planId}.md`)), true);
+
+  const executionRead = await state.readExecution(planId);
+  assert.equal(executionRead.ok, true);
+  assert.equal(executionRead.artifact.markdown, "# Legacy execution log\n");
+});
+
+test("accepts identical legacy and canonical bytes without modification", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const twinBytes = legacyArtifact(repo, "plan", "twin-plan", "# Twin plan\n");
+  seedLegacy(repo, "plans", "twin-plan", twinBytes);
+  fs.mkdirSync(path.join(stateRoot(repo), "plans"), { recursive: true });
+  const canonicalTarget = path.join(stateRoot(repo), "plans", "twin-plan.md");
+  fs.writeFileSync(canonicalTarget, twinBytes, "utf8");
+
+  const read = await state.readPlan("twin-plan");
+  assert.equal(read.ok, true);
+  assert.equal(fs.readFileSync(canonicalTarget, "utf8"), twinBytes, "identical bytes are accepted untouched");
+});
+
+test("migrates disjoint legacy and canonical plan IDs without dropping either", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const written = await state.writePlan({ planId: "canonical-plan", markdown: "# Canonical side\n" });
+  assert.equal(written.ok, true);
+  const legacyBytes = legacyArtifact(repo, "plan", "legacy-plan", "# Legacy side\n");
+  seedLegacy(repo, "plans", "legacy-plan", legacyBytes);
+
+  const read = await state.readPlan("legacy-plan");
+  assert.equal(read.ok, true);
+  assert.equal(read.artifact.markdown, "# Legacy side\n");
+  assert.equal(
+    fs.readFileSync(path.join(stateRoot(repo), "plans", "legacy-plan.md"), "utf8"),
+    legacyBytes,
+  );
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "canonical-plan.md")), true, "the pre-existing canonical artifact survives");
+  assert.equal(fs.existsSync(path.join(legacyStateRoot(repo), "plans", "legacy-plan.md")), true, "the legacy artifact is preserved in place");
+});
+
+test("fails closed on divergent legacy and canonical bytes without selecting or replacing either", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const legacyBytes = legacyArtifact(repo, "plan", "split-plan", "# Legacy version\n");
+  const canonicalBytes = legacyArtifact(repo, "plan", "split-plan", "# Canonical version\n");
+  seedLegacy(repo, "plans", "split-plan", legacyBytes);
+  fs.mkdirSync(path.join(stateRoot(repo), "plans"), { recursive: true });
+  const canonicalTarget = path.join(stateRoot(repo), "plans", "split-plan.md");
+  fs.writeFileSync(canonicalTarget, canonicalBytes, "utf8");
+
+  const read = await state.readPlan("split-plan");
+  assert.equal(read.ok, false);
+  assert.equal(read.error.code, "MIGRATION_CONFLICT");
+  assert.equal(read.error.retryable, false);
+  assert.deepEqual(
+    read.error.conflicts.map((conflict) => [conflict.planId, conflict.reason]),
+    [["split-plan", "DIVERGENT_BYTES"]],
+  );
+  assert.equal(fs.readFileSync(canonicalTarget, "utf8"), canonicalBytes, "the canonical artifact was not replaced");
+  assert.equal(fs.readFileSync(path.join(legacyStateRoot(repo), "plans", "split-plan.md"), "utf8"), legacyBytes, "the legacy artifact was not replaced");
+});
+
+test("fails closed on an invalid legacy artifact instead of silently skipping it", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  seedLegacy(repo, "plans", "broken-plan", "no frontmatter here\n");
+
+  const read = await state.readPlan("broken-plan");
+  assert.equal(read.ok, false);
+  assert.equal(read.error.code, "MIGRATION_CONFLICT");
+  assert.equal(read.error.conflicts[0].reason, "CORRUPT_LEGACY_ARTIFACT");
+  assert.equal(fs.existsSync(path.join(legacyStateRoot(repo), "plans", "broken-plan.md")), true);
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "broken-plan.md")), false);
+});
+
+test("recovers an interrupted migration by rolling the staged promotion forward", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "rescued-plan";
+  const planBytes = legacyArtifact(repo, "plan", planId, "# Rescued plan\n");
+  seedLegacy(repo, "plans", planId, planBytes);
+  const canonicalDirectory = path.join(stateRoot(repo), "plans");
+  fs.mkdirSync(canonicalDirectory, { recursive: true });
+  const temp = path.join(canonicalDirectory, `${planId}.md.999.abcdef.migrating`);
+  fs.writeFileSync(temp, planBytes, "utf8");
+  const journalPath = path.join(stateRoot(repo), ".migration-journal");
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify([{ artifactType: "plan", planId, temp, target: path.join(canonicalDirectory, `${planId}.md`), stagedAt: FIXED_TIME.toISOString() }], null, 2),
+    "utf8",
+  );
+
+  const read = await state.readPlan(planId);
+  assert.equal(read.ok, true);
+  assert.equal(read.artifact.markdown, "# Rescued plan\n");
+  assert.equal(fs.existsSync(temp), false, "the staged temp file was promoted");
+  assert.equal(fs.readFileSync(journalPath, "utf8").trim(), "[]", "the journal was cleared after recovery");
+  assert.equal(fs.readFileSync(path.join(legacyStateRoot(repo), "plans", `${planId}.md`), "utf8"), planBytes, "the legacy source is preserved");
+});
+
+test("rolls back an interrupted migration whose staged temp file is gone", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const journalPath = path.join(stateRoot(repo), ".migration-journal");
+  fs.mkdirSync(stateRoot(repo), { recursive: true });
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify([{ artifactType: "plan", planId: "rolled-back-plan", temp: path.join(stateRoot(repo), "plans", "missing.migrating"), target: path.join(stateRoot(repo), "plans", "rolled-back-plan.md"), stagedAt: FIXED_TIME.toISOString() }], null, 2),
+    "utf8",
+  );
+
+  const read = await state.readPlan("rolled-back-plan");
+  assert.equal(read.ok, false);
+  assert.equal(read.error.code, "NOT_FOUND");
+  assert.equal(fs.readFileSync(journalPath, "utf8").trim(), "[]", "the dropped entry was rolled back");
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), "plans", "rolled-back-plan.md")), false);
+});
+
+test("reports a fresh foreign migration lock as busy and steals a stale one", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  fs.mkdirSync(stateRoot(repo), { recursive: true });
+  const lockPath = path.join(stateRoot(repo), ".migration-lock");
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({ pid: 424242, acquiredAt: FIXED_TIME.toISOString() }),
+    "utf8",
+  );
+
+  const busy = await state.readPlan("locked-plan");
+  assert.equal(busy.ok, false);
+  assert.equal(busy.error.code, "MIGRATION_BUSY");
+  assert.equal(busy.error.retryable, true);
+
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({ pid: 424242, acquiredAt: "2020-01-01T00:00:00.000Z" }),
+    "utf8",
+  );
+  const stolen = await state.writePlan({ planId: "locked-plan", markdown: "# After the stale lock\n" });
+  assert.equal(stolen.ok, true);
+  assert.equal((await state.readPlan("locked-plan")).ok, true);
+});
+
+test("reconciles an active legacy write as a conflict instead of last-writer-wins", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const first = legacyArtifact(repo, "plan", "live-plan", "# Legacy version one\n");
+  seedLegacy(repo, "plans", "live-plan", first);
+
+  const seeded = await state.readPlan("live-plan");
+  assert.equal(seeded.ok, true, "the first legacy write migrates");
+  assert.equal(seeded.artifact.markdown, "# Legacy version one\n");
+
+  // An old-version writer overwrites the legacy copy after the migration.
+  const second = legacyArtifact(repo, "plan", "live-plan", "# Legacy version two\n");
+  seedLegacy(repo, "plans", "live-plan", second);
+
+  const after = await state.readPlan("live-plan");
+  assert.equal(after.ok, false);
+  assert.equal(after.error.code, "MIGRATION_CONFLICT");
+  assert.equal(after.error.retryable, false);
+  assert.deepEqual(
+    after.error.conflicts.map((conflict) => [conflict.planId, conflict.reason]),
+    [["live-plan", "DIVERGENT_BYTES"]],
+  );
+  assert.equal(
+    fs.readFileSync(path.join(stateRoot(repo), "plans", "live-plan.md"), "utf8"),
+    first,
+    "the canonical copy was not silently kept over the newer legacy write",
+  );
+  assert.equal(
+    fs.readFileSync(path.join(legacyStateRoot(repo), "plans", "live-plan.md"), "utf8"),
+    second,
+    "the active legacy write was not silently lost",
+  );
 });

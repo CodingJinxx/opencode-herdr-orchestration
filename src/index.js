@@ -24,10 +24,14 @@ function stateError(code, message, retryable = false) {
 // tools. Enforcement mirrors STATE_TOOL_ACCESS in src/agents.js: the planning
 // shepherd writes and reads plan artifacts; shepherd-governor and sheepdog
 // read the authoritative plan; sheepdog writes and reads execution artifacts.
-// Artifacts are durable Markdown files under the repository's shared Git
-// common directory, so linked worktrees share state while separate clones
-// never do. The state service invokes only read-only `git rev-parse`; it
-// never writes arbitrary Git metadata.
+// Artifacts are durable Markdown files under the canonical
+// `<git-common-dir>/flocky` state root in the repository's shared Git common
+// directory, so linked worktrees share state while separate clones never do.
+// Legacy `<git-common-dir>/herdr` artifacts are reconciled into the canonical
+// root before every plan or execution operation — copied, accepted, or failed
+// closed on conflict — and the legacy root is never auto-deleted. The state
+// service invokes only read-only `git rev-parse`; it never writes arbitrary
+// Git metadata.
 export function createStateTools(stateOptions = {}) {
   const state = createStateService(stateOptions);
 
