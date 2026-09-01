@@ -11,6 +11,10 @@ import plugin from "../src/index.js";
 import { STATE_TOOLS } from "../src/agents.js";
 import * as packageEntry from "../src/plugin.js";
 
+function realpath(value) {
+  return (fs.realpathSync.native ?? fs.realpathSync)(value);
+}
+
 test("npm package entry exports only the server plugin", () => {
   assert.deepEqual(Object.keys(packageEntry), ["server"]);
   assert.equal(packageEntry.server, plugin);
@@ -167,10 +171,10 @@ function stateRepository(prefix = "orchestration-plugin-state-") {
 function finalizeRepository(cwd) {
   const run = (args) =>
     execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
-  const commonDir = fs.realpathSync(
+  const commonDir = realpath(
     path.resolve(cwd, run(["rev-parse", "--git-common-dir"])),
   );
-  const toplevel = fs.realpathSync(path.resolve(cwd));
+  const toplevel = realpath(path.resolve(cwd));
   return { cwd, toplevel, commonDir };
 }
 
@@ -181,7 +185,7 @@ function linkStateWorktree(repo, branch = "linked-state-worktree") {
     encoding: "utf8",
     windowsHide: true,
   });
-  return { cwd, toplevel: fs.realpathSync(path.resolve(cwd)) };
+  return { cwd, toplevel: realpath(path.resolve(cwd)) };
 }
 
 function stateContext(agent, captured = []) {
@@ -289,7 +293,7 @@ test("shares state across linked worktrees but never across clones", async () =>
   assert.equal(fromClone.ok, false, "state does not cross clones");
   assert.equal(fromClone.error.code, "NOT_FOUND");
 
-  const cloneCommonDir = fs.realpathSync(path.resolve(clonePath, ".git"));
+  const cloneCommonDir = realpath(path.resolve(clonePath, ".git"));
   const artifact = path.join(repo.commonDir, "herdr", "plans", "shared-01.md");
   fs.mkdirSync(path.join(cloneCommonDir, "herdr", "plans"), { recursive: true });
   fs.copyFileSync(artifact, path.join(cloneCommonDir, "herdr", "plans", "shared-01.md"));

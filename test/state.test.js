@@ -10,6 +10,10 @@ import { ARTIFACT_TYPES, createStateService } from "../src/state.js";
 
 const FIXED_TIME = new Date("2026-08-31T12:00:00.000Z");
 
+function realpath(value) {
+  return (fs.realpathSync.native ?? fs.realpathSync)(value);
+}
+
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
 }
@@ -20,15 +24,15 @@ function repository(prefix = "orchestration-state-") {
   git(cwd, "config", "user.email", "test@example.com");
   git(cwd, "config", "user.name", "Test");
   execFileSync("git", ["commit", "--allow-empty", "-m", "initial", "-q"], { cwd });
-  const commonDir = fs.realpathSync(path.resolve(cwd, git(cwd, "rev-parse", "--git-common-dir")));
-  const toplevel = fs.realpathSync(path.resolve(cwd));
+  const commonDir = realpath(path.resolve(cwd, git(cwd, "rev-parse", "--git-common-dir")));
+  const toplevel = realpath(path.resolve(cwd));
   return { cwd, toplevel, commonDir };
 }
 
 function linkWorktree(repo, branch = "linked-worktree") {
   const cwd = `${repo.cwd}-linked`;
   git(repo.cwd, "worktree", "add", "-b", branch, cwd);
-  return { cwd, toplevel: fs.realpathSync(path.resolve(cwd)) };
+  return { cwd, toplevel: realpath(path.resolve(cwd)) };
 }
 
 function service(options = {}) {
