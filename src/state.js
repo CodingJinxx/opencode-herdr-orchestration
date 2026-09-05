@@ -79,6 +79,63 @@ const STEERING_LOCK_RETRIES = 200;
 const STEERING_LOCK_RETRY_MS = 10;
 const STEERING_ID_PREFIX = "st_";
 
+// --- Shepherd ownership and lifecycle synchronization (M3) ------------------
+// Validated target lifecycle records per active Plan ID. All text fields are
+// bounded semantic summaries; reasoning transcripts and terminal scrollback
+// are never stored (SENSITIVE_CONTENT_EXCLUDED). Closed vocabularies below
+// are the only accepted values for their fields.
+export const OWNERSHIP_SCHEMA_VERSION = 1;
+export const OWNER_PHASES = Object.freeze({ PLANNING: "planning", GOVERNANCE: "governance" });
+export const LIFECYCLE_STATES = Object.freeze({
+  PLANNING: "planning",
+  EXECUTING: "executing",
+  RESULT_EVALUATION: "result-evaluation",
+  CONSEQUENTIAL_PREPARATION: "consequential-preparation",
+  FINALIZED: "finalized",
+});
+export const SYNC_POINTS = Object.freeze({
+  PLANNING_START: "planning-start",
+  PRE_PLAN: "pre-plan",
+  PRE_ASSIGNMENT: "pre-assignment",
+  MILESTONE_EXECUTING: "milestone-executing",
+  RESULT_RECEIVED: "result-received",
+  CONTINUE: "continue",
+  FINALIZE: "finalize",
+  CONSEQUENTIAL_PREPARATION: "consequential-preparation",
+});
+export const SYNC_DISPOSITIONS = Object.freeze({
+  INTEGRATED: "integrated",
+  CORRECTED: "corrected",
+  ESCALATED: "escalated",
+  DEFERRED: "deferred",
+});
+export const SNAPSHOT_STAGES = Object.freeze({
+  PLANNING: "planning",
+  EXECUTING: "executing",
+  RESULT_EVALUATION: "result-evaluation",
+  CONSEQUENTIAL_PREPARATION: "consequential-preparation",
+});
+// Steering never authorizes consequential actions. This closed list plus any
+// other consequential action is always denied; existing approvals still apply.
+export const CONSEQUENTIAL_DENIED_ACTIONS = Object.freeze(["push", "tag", "publish", "deploy", "merge"]);
+const OWNERSHIP_DIR = "ownership";
+const OWNERSHIP_RECORD_FILE = "record.json";
+const OWNERSHIP_SYNC_FILE = "sync.json";
+const OWNERSHIP_SNAPSHOTS_DIR = "snapshots";
+const OWNERSHIP_LOCK_FILE = "queue.lock";
+const OWNERSHIP_LOCK_STALE_MS = 30_000;
+const OWNERSHIP_LOCK_RETRIES = 200;
+const OWNERSHIP_LOCK_RETRY_MS = 10;
+const SESSION_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+const MAX_MILESTONE_CHARS = 256;
+const MAX_OBJECTIVE_CHARS = 2048;
+const MAX_ACTION_CHARS = 2048;
+const MAX_SHEEPDOG_TARGET_CHARS = 128;
+const MAX_REVISION_CHARS = 128;
+const MAX_PENDING_CONSEQUENTIAL_CHARS = 1024;
+const MAX_CORRECTION_CHARS = 2048;
+const SENSITIVE_CONTENT_PATTERN = /(transcript|scrollback)/i;
+
 function error(code, message, retryable = false, details) {
   return { ok: false, error: { code, message, retryable, ...(details ?? {}) } };
 }
@@ -915,6 +972,158 @@ export function createStateService(options = {}) {
     return null;
   }
 
+  // --- M3 ownership validation ------------------------------------------------
+  const OWNER_PHASE_VALUES = new Set(Object.values(OWNER_PHASES));
+  const LIFECYCLE_STATE_VALUES = new Set(Object.values(LIFECYCLE_STATES));
+  const SYNC_POINT_VALUES = new Set(Object.values(SYNC_POINTS));
+  const SYNC_DISPOSITION_VALUES = new Set(Object.values(SYNC_DISPOSITIONS));
+  const SNAPSHOT_STAGE_VALUES = new Set(Object.values(SNAPSHOT_STAGES));
+
+  function sensitiveExcluded(value) {
+    return typeof value === "string" && SENSITIVE_CONTENT_PATTERN.test(value);
+  }
+
+  function validateOwnerPhase(phase) {
+    if (typeof phase !== "string" || !OWNER_PHASE_VALUES.has(phase)) {
+      return error(
+        "INVALID_OWNER_PHASE",
+        `Owner phase must be one of: ${[...OWNER_PHASE_VALUES].join(", ")}.`,
+      );
+    }
+    return null;
+  }
+
+  function validateSession(session) {
+    if (typeof session !== "string" || !SESSION_PATTERN.test(session)) {
+      return error(
+        "INVALID_SESSION",
+        "Authoritative session must be 1-128 characters of letters, digits, colon, underscore, or hyphen.",
+      );
+    }
+    return null;
+  }
+
+  function validateGeneration(generation) {
+    if (!Number.isSafeInteger(generation) || generation < 1) {
+      return error("INVALID_GENERATION", "Generation must be a safe integer of at least 1.");
+    }
+    return null;
+  }
+
+  function validateMilestone(milestone) {
+    if (typeof milestone !== "string" || milestone.length === 0 || milestone.length > MAX_MILESTONE_CHARS) {
+      return error(
+        "INVALID_MILESTONE",
+        `Milestone must be a non-empty string of at most ${MAX_MILESTONE_CHARS} characters.`,
+      );
+    }
+    if (sensitiveExcluded(milestone)) {
+      return error(
+        "SENSITIVE_CONTENT_EXCLUDED",
+        "Milestone must not contain reasoning transcript or scrollback content; store only bounded semantic summaries.",
+      );
+    }
+    return null;
+  }
+
+  function validateLifecycleState(value) {
+    if (typeof value !== "string" || !LIFECYCLE_STATE_VALUES.has(value)) {
+      return error(
+        "INVALID_LIFECYCLE_STATE",
+        `Lifecycle state must be one of: ${[...LIFECYCLE_STATE_VALUES].join(", ")}.`,
+      );
+    }
+    return null;
+  }
+
+  function validateBoundedSemantic(field, value, max, { allowEmpty = true } = {}) {
+    if (typeof value !== "string") {
+      return error("INVALID_LIFECYCLE_FIELD", `${field} must be a string.`);
+    }
+    if ((!allowEmpty && value.length === 0) || value.length > max) {
+      return error(
+        "INVALID_LIFECYCLE_FIELD",
+        `${field} must be ${allowEmpty ? "0" : "1"}-${max} characters.`,
+      );
+    }
+    if (sensitiveExcluded(value)) {
+      return error(
+        "SENSITIVE_CONTENT_EXCLUDED",
+        `${field} must not contain reasoning transcript or scrollback content; store only bounded semantic summaries.`,
+      );
+    }
+    return null;
+  }
+
+  function validateSyncPoint(value) {
+    if (typeof value !== "string" || !SYNC_POINT_VALUES.has(value)) {
+      return error("INVALID_SYNC_POINT", `Sync point must be one of: ${[...SYNC_POINT_VALUES].join(", ")}.`);
+    }
+    return null;
+  }
+
+  function validateDisposition(value) {
+    if (typeof value !== "string" || !SYNC_DISPOSITION_VALUES.has(value)) {
+      return error(
+        "INVALID_DISPOSITION",
+        `Disposition must be one of: ${[...SYNC_DISPOSITION_VALUES].join(", ")}.`,
+      );
+    }
+    return null;
+  }
+
+  function validateSnapshotStage(value) {
+    if (typeof value !== "string" || !SNAPSHOT_STAGE_VALUES.has(value)) {
+      return error(
+        "INVALID_SNAPSHOT_STAGE",
+        `Snapshot stage must be one of: ${[...SNAPSHOT_STAGE_VALUES].join(", ")}.`,
+      );
+    }
+    return null;
+  }
+
+  function consequentialDenial() {
+    return {
+      push: false,
+      tag: false,
+      publish: false,
+      deploy: false,
+      merge: false,
+      anyConsequential: false,
+      approvalsStillRequired: true,
+      note: "Steering never authorizes push, tag, publish, deploy, merge, or any consequential action; existing approvals still required.",
+    };
+  }
+
+  function validateCorrectionText(correction) {
+    if (typeof correction !== "string" || correction.length === 0 || correction.length > MAX_CORRECTION_CHARS) {
+      return error(
+        "INVALID_CORRECTION",
+        `Correction must be a non-empty string of at most ${MAX_CORRECTION_CHARS} characters.`,
+      );
+    }
+    if (sensitiveExcluded(correction)) {
+      return error(
+        "SENSITIVE_CONTENT_EXCLUDED",
+        "Correction must not contain reasoning transcript or scrollback content; send only bounded semantic instructions.",
+      );
+    }
+    // Raw steering records are JSON dumps with sequence plus opaque id, or
+    // checkpoint shapes. Shepherd sends normal corrective instructions, never
+    // raw records.
+    if (
+      (/"sequence"\s*:\s*\d+/.test(correction) && /st_[0-9a-f]{16}/.test(correction)) ||
+      /"consumedIds"/.test(correction) ||
+      (/"checkpoint"\s*:/.test(correction) && /"highestContiguous"/.test(correction))
+    ) {
+      return error(
+        "RAW_RECORD_REJECTED",
+        "Correction must be normal semantic instructions for sheepdog, never raw steering records or checkpoint dumps.",
+      );
+    }
+    return null;
+  }
+
   function steeringRoot(layout) {
     return path.join(layout.identity, STATE_DIR, STEERING_DIR);
   }
@@ -1265,6 +1474,625 @@ export function createStateService(options = {}) {
     return { ok: true, recovered: "unknown-journal-discarded" };
   }
 
+  // --- M3 ownership storage ---------------------------------------------------
+  //
+  // Lifecycle records live per active Plan ID under
+  // `<git-common-dir>/flocky/ownership/<planId>/record.json` with a scoped
+  // per-target lock. Sync dispositions live in `sync.json` as a map from
+  // closed sync-point vocabulary to disposition plus fencing. Snapshots live
+  // in `snapshots/<stage>.json` for the four snapshot stages. All writes are
+  // atomic via temp plus rename under the per-target lock, so concurrent
+  // planning and governance contenders elect exactly one winner and losers
+  // fail closed with STALE_GENERATION instead of diverging.
+  function ownershipPlanDir(layout, planId) {
+    return path.join(layout.identity, STATE_DIR, OWNERSHIP_DIR, planId);
+  }
+
+  function ownershipRecordPath(layout, planId) {
+    return path.join(ownershipPlanDir(layout, planId), OWNERSHIP_RECORD_FILE);
+  }
+
+  function ownershipSyncPath(layout, planId) {
+    return path.join(ownershipPlanDir(layout, planId), OWNERSHIP_SYNC_FILE);
+  }
+
+  function ownershipSnapshotPath(layout, planId, stage) {
+    return path.join(ownershipPlanDir(layout, planId), OWNERSHIP_SNAPSHOTS_DIR, `${stage}.json`);
+  }
+
+  function ownershipLockPath(layout, planId) {
+    return path.join(ownershipPlanDir(layout, planId), OWNERSHIP_LOCK_FILE);
+  }
+
+  async function acquireOwnershipLock(lockPath) {
+    const claim = `${process.pid}.${randomBytes(6).toString("hex")}\n`;
+    for (let attempt = 0; attempt < OWNERSHIP_LOCK_RETRIES; attempt += 1) {
+      try {
+        fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+        fs.writeFileSync(lockPath, claim, { flag: "wx" });
+        return { ok: true, claim };
+      } catch (cause) {
+        if (cause?.code !== "EEXIST") {
+          return error("WRITE_FAILED", `Unable to acquire ownership lock: ${processErrorDetail(cause)}`, true);
+        }
+      }
+      let mtimeMs;
+      try {
+        mtimeMs = fs.statSync(lockPath).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (Number.isFinite(mtimeMs) && Date.now() - mtimeMs > OWNERSHIP_LOCK_STALE_MS) {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          // Another contender removed or replaced it; retry.
+        }
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, OWNERSHIP_LOCK_RETRY_MS));
+    }
+    return error("OWNERSHIP_BUSY", "Another ownership mutation holds the per-target lock; retry.", true);
+  }
+
+  function releaseOwnershipLock(lockPath, claim) {
+    try {
+      const current = fs.readFileSync(lockPath, "utf8");
+      if (current !== claim) return;
+    } catch {
+      return;
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // Best-effort release; a stale lock is taken over by mtime.
+    }
+  }
+
+  function readOwnershipRecordFile(recordPath, layout, planId) {
+    let text;
+    try {
+      text = fs.readFileSync(recordPath, "utf8");
+    } catch (cause) {
+      if (cause?.code === "ENOENT") return { ok: true, present: false };
+      return error("READ_FAILED", `Unable to read ownership record: ${processErrorDetail(cause)}`, true);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (cause) {
+      return error("CORRUPT_OWNERSHIP", `Ownership record is not valid JSON: ${processErrorDetail(cause)}`);
+    }
+    if (parsed?.schema !== OWNERSHIP_SCHEMA_VERSION) {
+      return error("CORRUPT_OWNERSHIP", `Ownership schema ${JSON.stringify(parsed?.schema)} is not ${OWNERSHIP_SCHEMA_VERSION}.`);
+    }
+    if (parsed?.planId !== planId) {
+      return error("CORRUPT_OWNERSHIP", "Ownership record carries a different plan ID.");
+    }
+    if (parsed?.identity !== layout.identity) {
+      return error(
+        "IDENTITY_MISMATCH",
+        `Ownership record belongs to repository ${parsed?.identity}, current repository identity is ${layout.identity}.`,
+      );
+    }
+    return { ok: true, present: true, record: parsed };
+  }
+
+  function validateOwnershipRecordShape(record) {
+    const phaseFailure = validateOwnerPhase(record?.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(record?.session);
+    if (sessionFailure) return sessionFailure;
+    const generationFailure = validateGeneration(record?.generation);
+    if (generationFailure) return generationFailure;
+    const milestoneFailure = validateMilestone(record?.milestone);
+    if (milestoneFailure) return milestoneFailure;
+    const stateFailure = validateLifecycleState(record?.lifecycleState);
+    if (stateFailure) return stateFailure;
+    for (const [field, max] of [
+      ["currentObjective", MAX_OBJECTIVE_CHARS],
+      ["currentAction", MAX_ACTION_CHARS],
+    ]) {
+      const failure = validateBoundedSemantic(field, record?.[field], max, { allowEmpty: true });
+      if (failure) return failure;
+    }
+    for (const [field, max] of [
+      ["activeSheepdogTarget", MAX_SHEEPDOG_TARGET_CHARS],
+      ["relevantRevision", MAX_REVISION_CHARS],
+      ["pendingConsequentialAction", MAX_PENDING_CONSEQUENTIAL_CHARS],
+    ]) {
+      const failure = validateBoundedSemantic(field, record?.[field], max, { allowEmpty: true });
+      if (failure) return failure;
+    }
+    if (typeof record?.updatedAt !== "string" || !Number.isFinite(Date.parse(record.updatedAt))) {
+      return error("CORRUPT_OWNERSHIP", "Ownership record updatedAt is not a valid timestamp.");
+    }
+    return null;
+  }
+
+  function checkOwnerFencing(record, phase, session, generation) {
+    if (record.phase !== phase || record.session !== session) {
+      return error(
+        "NOT_AUTHORITATIVE_PHASE",
+        `NOT AUTHORITATIVE PHASE: plan ${JSON.stringify(record.planId)} is owned by phase ${JSON.stringify(record.phase)} session ${JSON.stringify(record.session)} generation ${record.generation}; caller ${JSON.stringify(phase)} session ${JSON.stringify(session)} is not authoritative.`,
+      );
+    }
+    if (generation !== undefined && record.generation !== generation) {
+      return error(
+        "STALE_GENERATION",
+        `Generation ${JSON.stringify(generation)} does not match authoritative generation ${record.generation} for plan ${JSON.stringify(record.planId)}; refetch ownership before acting.`,
+      );
+    }
+    return null;
+  }
+
+  function readOwnershipSyncFile(syncPath, layout, planId) {
+    let text;
+    try {
+      text = fs.readFileSync(syncPath, "utf8");
+    } catch (cause) {
+      if (cause?.code === "ENOENT") {
+        return {
+          ok: true,
+          present: false,
+          sync: { schema: OWNERSHIP_SCHEMA_VERSION, planId, identity: layout.identity, points: {} },
+        };
+      }
+      return error("READ_FAILED", `Unable to read ownership sync: ${processErrorDetail(cause)}`, true);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (cause) {
+      return error("CORRUPT_OWNERSHIP", `Ownership sync is not valid JSON: ${processErrorDetail(cause)}`);
+    }
+    if (parsed?.schema !== OWNERSHIP_SCHEMA_VERSION || parsed?.planId !== planId || parsed?.identity !== layout.identity) {
+      return error("CORRUPT_OWNERSHIP", "Ownership sync identity or schema mismatch.");
+    }
+    if (!parsed?.points || typeof parsed.points !== "object" || Array.isArray(parsed.points)) {
+      return error("CORRUPT_OWNERSHIP", "Ownership sync points must be an object.");
+    }
+    return { ok: true, present: true, sync: parsed };
+  }
+
+  function validateClaimInput(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Ownership claim requires an object with planId, phase, session, generation, milestone, lifecycleState, and bounded semantic fields.");
+    }
+    const allowed = new Set([
+      "planId",
+      "phase",
+      "session",
+      "generation",
+      "milestone",
+      "lifecycleState",
+      "currentObjective",
+      "currentAction",
+      "activeSheepdogTarget",
+      "relevantRevision",
+      "pendingConsequentialAction",
+    ]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return error("INVALID_REQUEST", `Ownership claim accepts only ${[...allowed].join(", ")}.`);
+    }
+    for (const key of ["planId", "phase", "session", "generation", "milestone", "lifecycleState"]) {
+      if (!(key in input)) return error("INVALID_REQUEST", `Ownership claim requires ${key}.`);
+    }
+    // Optional semantic fields default to empty string when omitted.
+    const normalized = {
+      currentObjective: "",
+      currentAction: "",
+      activeSheepdogTarget: "",
+      relevantRevision: "",
+      pendingConsequentialAction: "",
+      ...input,
+    };
+    const planIdFailure = validatePlanId(normalized.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(normalized.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(normalized.session);
+    if (sessionFailure) return sessionFailure;
+    const generationFailure = validateGeneration(normalized.generation);
+    if (generationFailure) return generationFailure;
+    const milestoneFailure = validateMilestone(normalized.milestone);
+    if (milestoneFailure) return milestoneFailure;
+    const stateFailure = validateLifecycleState(normalized.lifecycleState);
+    if (stateFailure) return stateFailure;
+    for (const [field, max] of [
+      ["currentObjective", MAX_OBJECTIVE_CHARS],
+      ["currentAction", MAX_ACTION_CHARS],
+      ["activeSheepdogTarget", MAX_SHEEPDOG_TARGET_CHARS],
+      ["relevantRevision", MAX_REVISION_CHARS],
+      ["pendingConsequentialAction", MAX_PENDING_CONSEQUENTIAL_CHARS],
+    ]) {
+      const failure = validateBoundedSemantic(field, normalized[field], max, { allowEmpty: true });
+      if (failure) return failure;
+    }
+    return { ok: true, normalized };
+  }
+
+  async function claimOwnership(input) {
+    const validated = validateClaimInput(input);
+    if (validated?.error) return validated;
+    const normalized = validated.normalized;
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const lockPath = ownershipLockPath(layout, normalized.planId);
+    const acquired = await acquireOwnershipLock(lockPath);
+    if (acquired.error) return acquired;
+    try {
+      const recordPath = ownershipRecordPath(layout, normalized.planId);
+      const existing = readOwnershipRecordFile(recordPath, layout, normalized.planId);
+      if (existing.error) return existing;
+      if (!existing.present) {
+        if (normalized.generation !== 1) {
+          return error(
+            "STALE_GENERATION",
+            `First ownership claim for plan ${JSON.stringify(normalized.planId)} must use generation 1.`,
+          );
+        }
+      } else {
+        const shapeFailure = validateOwnershipRecordShape(existing.record);
+        if (shapeFailure) return shapeFailure;
+        if (normalized.generation <= existing.record.generation) {
+          return error(
+            "STALE_GENERATION",
+            `Claim generation ${normalized.generation} is not newer than authoritative generation ${existing.record.generation} for plan ${JSON.stringify(normalized.planId)}; both phases cannot race on the same generation.`,
+          );
+        }
+      }
+      const timestamp = resolveNow(now).toISOString();
+      const record = {
+        schema: OWNERSHIP_SCHEMA_VERSION,
+        planId: normalized.planId,
+        identity: layout.identity,
+        toplevel: layout.toplevel,
+        phase: normalized.phase,
+        session: normalized.session,
+        generation: normalized.generation,
+        milestone: normalized.milestone,
+        lifecycleState: normalized.lifecycleState,
+        currentObjective: normalized.currentObjective,
+        currentAction: normalized.currentAction,
+        activeSheepdogTarget: normalized.activeSheepdogTarget,
+        relevantRevision: normalized.relevantRevision,
+        pendingConsequentialAction: normalized.pendingConsequentialAction,
+        updatedAt: timestamp,
+      };
+      const written = writeAtomicFile(recordPath, JSON.stringify(record, null, 2));
+      if (written.error) return written;
+      return { ok: true, ownership: record };
+    } finally {
+      releaseOwnershipLock(lockPath, acquired.claim);
+    }
+  }
+
+  async function readOwnership(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Ownership read requires an object with planId, phase, and session.");
+    }
+    const keys = Object.keys(input);
+    if (keys.some((key) => key !== "planId" && key !== "phase" && key !== "session")) {
+      return error("INVALID_REQUEST", "Ownership read accepts only planId, phase, and session.");
+    }
+    if (input.planId === undefined || input.phase === undefined || input.session === undefined) {
+      return error("INVALID_REQUEST", "Ownership read requires planId, phase, and session.");
+    }
+    const planIdFailure = validatePlanId(input.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return sessionFailure;
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const recordPath = ownershipRecordPath(layout, input.planId);
+    const stored = readOwnershipRecordFile(recordPath, layout, input.planId);
+    if (stored.error) return stored;
+    if (!stored.present) return error("OWNERSHIP_NOT_FOUND", `No ownership record exists for plan ${JSON.stringify(input.planId)}.`);
+    const shapeFailure = validateOwnershipRecordShape(stored.record);
+    if (shapeFailure) return shapeFailure;
+    const fencing = checkOwnerFencing(stored.record, input.phase, input.session, undefined);
+    if (fencing) return fencing;
+    return { ok: true, ownership: stored.record };
+  }
+
+  async function recordSync(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Ownership sync requires planId, phase, session, generation, syncPoint, and disposition.");
+    }
+    const allowed = new Set(["planId", "phase", "session", "generation", "syncPoint", "disposition", "note"]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return error("INVALID_REQUEST", "Ownership sync accepts only planId, phase, session, generation, syncPoint, disposition, and optional note.");
+    }
+    for (const key of ["planId", "phase", "session", "generation", "syncPoint", "disposition"]) {
+      if (!(key in input)) return error("INVALID_REQUEST", `Ownership sync requires ${key}.`);
+    }
+    const planIdFailure = validatePlanId(input.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return sessionFailure;
+    const generationFailure = validateGeneration(input.generation);
+    if (generationFailure) return generationFailure;
+    const pointFailure = validateSyncPoint(input.syncPoint);
+    if (pointFailure) return pointFailure;
+    const dispositionFailure = validateDisposition(input.disposition);
+    if (dispositionFailure) return dispositionFailure;
+    if (input.note !== undefined) {
+      const noteFailure = validateBoundedSemantic("note", input.note, MAX_ACTION_CHARS, { allowEmpty: true });
+      if (noteFailure) return noteFailure;
+    }
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const lockPath = ownershipLockPath(layout, input.planId);
+    const acquired = await acquireOwnershipLock(lockPath);
+    if (acquired.error) return acquired;
+    try {
+      const recordPath = ownershipRecordPath(layout, input.planId);
+      const stored = readOwnershipRecordFile(recordPath, layout, input.planId);
+      if (stored.error) return stored;
+      if (!stored.present) return error("OWNERSHIP_NOT_FOUND", `No ownership record exists for plan ${JSON.stringify(input.planId)}; claim ownership before sync.`);
+      const shapeFailure = validateOwnershipRecordShape(stored.record);
+      if (shapeFailure) return shapeFailure;
+      const fencing = checkOwnerFencing(stored.record, input.phase, input.session, input.generation);
+      if (fencing) return fencing;
+      // Pending consequential action must be recorded before its mandatory
+      // consequential-preparation check: the lifecycle record must already
+      // carry a non-empty pending action.
+      if (input.syncPoint === SYNC_POINTS.CONSEQUENTIAL_PREPARATION && stored.record.pendingConsequentialAction.length === 0) {
+        return error(
+          "PENDING_CONSEQUENTIAL_REQUIRED",
+          "Pending consequential action must be recorded in the lifecycle record before the consequential-preparation sync point.",
+        );
+      }
+      const syncPath = ownershipSyncPath(layout, input.planId);
+      const current = readOwnershipSyncFile(syncPath, layout, input.planId);
+      if (current.error) return current;
+      const timestamp = resolveNow(now).toISOString();
+      const entry = {
+        syncPoint: input.syncPoint,
+        disposition: input.disposition,
+        phase: input.phase,
+        session: input.session,
+        generation: input.generation,
+        note: input.note ?? "",
+        timestamp,
+        consequentialAuthorization: consequentialDenial(),
+      };
+      const next = {
+        schema: OWNERSHIP_SCHEMA_VERSION,
+        planId: input.planId,
+        identity: layout.identity,
+        points: { ...current.sync.points, [input.syncPoint]: entry },
+      };
+      const written = writeAtomicFile(syncPath, JSON.stringify(next, null, 2));
+      if (written.error) return written;
+      return { ok: true, planId: input.planId, sync: entry, points: next.points };
+    } finally {
+      releaseOwnershipLock(lockPath, acquired.claim);
+    }
+  }
+
+  async function readSync(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Ownership sync read requires planId, phase, and session.");
+    }
+    const keys = Object.keys(input);
+    if (keys.some((key) => key !== "planId" && key !== "phase" && key !== "session")) {
+      return error("INVALID_REQUEST", "Ownership sync read accepts only planId, phase, and session.");
+    }
+    if (input.planId === undefined || input.phase === undefined || input.session === undefined) {
+      return error("INVALID_REQUEST", "Ownership sync read requires planId, phase, and session.");
+    }
+    const planIdFailure = validatePlanId(input.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return sessionFailure;
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const recordPath = ownershipRecordPath(layout, input.planId);
+    const stored = readOwnershipRecordFile(recordPath, layout, input.planId);
+    if (stored.error) return stored;
+    if (!stored.present) return error("OWNERSHIP_NOT_FOUND", `No ownership record exists for plan ${JSON.stringify(input.planId)}.`);
+    const fencing = checkOwnerFencing(stored.record, input.phase, input.session, undefined);
+    if (fencing) return fencing;
+    const syncPath = ownershipSyncPath(layout, input.planId);
+    const current = readOwnershipSyncFile(syncPath, layout, input.planId);
+    if (current.error) return current;
+    return { ok: true, planId: input.planId, points: current.sync.points, ownership: stored.record };
+  }
+
+  async function recordSnapshot(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Ownership snapshot requires planId, phase, session, generation, and stage.");
+    }
+    const allowed = new Set([
+      "planId",
+      "phase",
+      "session",
+      "generation",
+      "stage",
+      "milestone",
+      "lifecycleState",
+      "currentObjective",
+      "currentAction",
+      "activeSheepdogTarget",
+      "relevantRevision",
+      "pendingConsequentialAction",
+    ]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return error("INVALID_REQUEST", "Ownership snapshot accepts only lifecycle fields plus stage.");
+    }
+    for (const key of ["planId", "phase", "session", "generation", "stage"]) {
+      if (!(key in input)) return error("INVALID_REQUEST", `Ownership snapshot requires ${key}.`);
+    }
+    const planIdFailure = validatePlanId(input.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return sessionFailure;
+    const generationFailure = validateGeneration(input.generation);
+    if (generationFailure) return generationFailure;
+    const stageFailure = validateSnapshotStage(input.stage);
+    if (stageFailure) return stageFailure;
+    for (const [field, max] of [
+      ["milestone", MAX_MILESTONE_CHARS],
+      ["currentObjective", MAX_OBJECTIVE_CHARS],
+      ["currentAction", MAX_ACTION_CHARS],
+      ["activeSheepdogTarget", MAX_SHEEPDOG_TARGET_CHARS],
+      ["relevantRevision", MAX_REVISION_CHARS],
+      ["pendingConsequentialAction", MAX_PENDING_CONSEQUENTIAL_CHARS],
+    ]) {
+      if (input[field] !== undefined) {
+        const failure = field === "milestone"
+          ? (input[field].length === 0 ? error("INVALID_MILESTONE", "Milestone must be non-empty when provided.") : validateBoundedSemantic(field, input[field], max, { allowEmpty: false }))
+          : validateBoundedSemantic(field, input[field], max, { allowEmpty: true });
+        if (failure) return failure;
+        if (sensitiveExcluded(input[field])) {
+          return error("SENSITIVE_CONTENT_EXCLUDED", `${field} must not contain reasoning transcript or scrollback content.`);
+        }
+      }
+    }
+    if (input.lifecycleState !== undefined) {
+      const stateFailure = validateLifecycleState(input.lifecycleState);
+      if (stateFailure) return stateFailure;
+    }
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const lockPath = ownershipLockPath(layout, input.planId);
+    const acquired = await acquireOwnershipLock(lockPath);
+    if (acquired.error) return acquired;
+    try {
+      const recordPath = ownershipRecordPath(layout, input.planId);
+      const stored = readOwnershipRecordFile(recordPath, layout, input.planId);
+      if (stored.error) return stored;
+      if (!stored.present) return error("OWNERSHIP_NOT_FOUND", `No ownership record exists for plan ${JSON.stringify(input.planId)}; claim ownership before snapshots.`);
+      const shapeFailure = validateOwnershipRecordShape(stored.record);
+      if (shapeFailure) return shapeFailure;
+      const fencing = checkOwnerFencing(stored.record, input.phase, input.session, input.generation);
+      if (fencing) return fencing;
+      const pending = input.pendingConsequentialAction ?? stored.record.pendingConsequentialAction;
+      if (input.stage === SNAPSHOT_STAGES.CONSEQUENTIAL_PREPARATION && pending.length === 0) {
+        return error(
+          "PENDING_CONSEQUENTIAL_REQUIRED",
+          "Pending consequential action must be recorded before the consequential-preparation snapshot.",
+        );
+      }
+      const timestamp = resolveNow(now).toISOString();
+      const snapshot = {
+        schema: OWNERSHIP_SCHEMA_VERSION,
+        planId: input.planId,
+        identity: layout.identity,
+        stage: input.stage,
+        phase: input.phase,
+        session: input.session,
+        generation: input.generation,
+        milestone: input.milestone ?? stored.record.milestone,
+        lifecycleState: input.lifecycleState ?? stored.record.lifecycleState,
+        currentObjective: input.currentObjective ?? stored.record.currentObjective,
+        currentAction: input.currentAction ?? stored.record.currentAction,
+        activeSheepdogTarget: input.activeSheepdogTarget ?? stored.record.activeSheepdogTarget,
+        relevantRevision: input.relevantRevision ?? stored.record.relevantRevision,
+        pendingConsequentialAction: pending,
+        timestamp,
+        consequentialAuthorization: consequentialDenial(),
+      };
+      const target = ownershipSnapshotPath(layout, input.planId, input.stage);
+      const written = writeAtomicFile(target, JSON.stringify(snapshot, null, 2));
+      if (written.error) return written;
+      return { ok: true, snapshot };
+    } finally {
+      releaseOwnershipLock(lockPath, acquired.claim);
+    }
+  }
+
+  async function routeCorrection(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return error("INVALID_REQUEST", "Correction routing requires planId, phase, session, generation, and correction.");
+    }
+    const allowed = new Set(["planId", "phase", "session", "generation", "correction", "syncPoint"]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return error("INVALID_REQUEST", "Correction routing accepts only planId, phase, session, generation, correction, and optional syncPoint.");
+    }
+    for (const key of ["planId", "phase", "session", "generation", "correction"]) {
+      if (!(key in input)) return error("INVALID_REQUEST", `Correction routing requires ${key}.`);
+    }
+    const planIdFailure = validatePlanId(input.planId);
+    if (planIdFailure) return planIdFailure;
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return phaseFailure;
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return sessionFailure;
+    const generationFailure = validateGeneration(input.generation);
+    if (generationFailure) return generationFailure;
+    const correctionFailure = validateCorrectionText(input.correction);
+    if (correctionFailure) return correctionFailure;
+    if (input.syncPoint !== undefined) {
+      const pointFailure = validateSyncPoint(input.syncPoint);
+      if (pointFailure) return pointFailure;
+    }
+    const layout = await resolveRepositoryLayout();
+    if (layout.error) return layout;
+    const recordPath = ownershipRecordPath(layout, input.planId);
+    const stored = readOwnershipRecordFile(recordPath, layout, input.planId);
+    if (stored.error) return stored;
+    if (!stored.present) return error("OWNERSHIP_NOT_FOUND", `No ownership record exists for plan ${JSON.stringify(input.planId)}; claim ownership before corrections.`);
+    const fencing = checkOwnerFencing(stored.record, input.phase, input.session, input.generation);
+    if (fencing) return fencing;
+    const timestamp = resolveNow(now).toISOString();
+    // Semantic correction: normal instructions for sheepdog, never raw
+    // records. Steering never authorizes consequential actions.
+    return {
+      ok: true,
+      planId: input.planId,
+      correction: {
+        instruction: input.correction,
+        syncPoint: input.syncPoint ?? null,
+        target: "sheepdog",
+        channel: "normal-corrective-instructions",
+        timestamp,
+        generation: input.generation,
+      },
+      consequentialAuthorization: consequentialDenial(),
+    };
+  }
+
+  // Ownership-gated steering proof: when no ownership record exists the raw
+  // M2 behavior applies (explicit planId or single-target inference). When a
+  // record exists, the caller must prove authoritative phase plus session
+  // plus generation; otherwise NOT AUTHORITATIVE PHASE with no bodies loaded.
+  function parseOwnershipProof(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) return { present: false };
+    const hasProof = "phase" in input || "session" in input || "generation" in input;
+    if (!hasProof) return { present: false };
+    if (!("phase" in input && "session" in input && "generation" in input)) {
+      return { invalid: true };
+    }
+    const phaseFailure = validateOwnerPhase(input.phase);
+    if (phaseFailure) return { invalid: true, failure: phaseFailure };
+    const sessionFailure = validateSession(input.session);
+    if (sessionFailure) return { invalid: true, failure: sessionFailure };
+    const generationFailure = validateGeneration(input.generation);
+    if (generationFailure) return { invalid: true, failure: generationFailure };
+    return { present: true, phase: input.phase, session: input.session, generation: input.generation };
+  }
+
+  async function enforceOwnershipForSteering(layout, planId) {
+    const recordPath = ownershipRecordPath(layout, planId);
+    const stored = readOwnershipRecordFile(recordPath, layout, planId);
+    if (stored.error) return stored;
+    if (!stored.present) return { ok: true, owned: false };
+    const shapeFailure = validateOwnershipRecordShape(stored.record);
+    if (shapeFailure) return shapeFailure;
+    return { ok: true, owned: true, record: stored.record };
+  }
+
   async function submitSteering(input) {
     if (input === null || typeof input !== "object" || Array.isArray(input)) {
       return error("INVALID_REQUEST", "Steering submit requires an object with content and optional planId.");
@@ -1353,15 +2181,58 @@ export function createStateService(options = {}) {
   }
 
   async function checkSteering(input) {
-    const normalized = normalizeSteeringTargetInput(input);
-    if (normalized.invalid) {
-      return error("INVALID_REQUEST", "Steering check accepts only an explicit planId string or an object with optional planId.");
+    // M3 ownership fencing: when a lifecycle record exists for the target,
+    // only the recorded owner phase plus session plus generation may check.
+    // M2 callers without ownership keep the original explicit-or-singleton
+    // behavior with no filesystem side effects beyond reads.
+    let planIdInput;
+    let proof = { present: false };
+    if (input !== null && typeof input === "object" && !Array.isArray(input) && ("phase" in input || "session" in input || "generation" in input)) {
+      const parsed = parseOwnershipProof(input);
+      if (parsed.invalid) {
+        return parsed.failure ?? error("INVALID_REQUEST", "Steering check ownership proof requires phase, session, and generation together.");
+      }
+      proof = parsed;
+      if (!("planId" in input)) {
+        return error("INVALID_REQUEST", "Steering check with ownership proof requires an explicit planId.");
+      }
+      const extra = Object.keys(input).filter((key) => key !== "planId" && key !== "phase" && key !== "session" && key !== "generation");
+      if (extra.length > 0) {
+        return error("INVALID_REQUEST", "Steering check accepts only planId plus optional ownership proof (phase, session, generation).");
+      }
+      planIdInput = input.planId;
+    } else {
+      const normalized = normalizeSteeringTargetInput(input);
+      if (normalized.invalid) {
+        return error("INVALID_REQUEST", "Steering check accepts only an explicit planId string or an object with optional planId.");
+      }
+      planIdInput = normalized.planId;
     }
     const layout = await resolveRepositoryLayout();
     if (layout.error) return layout;
-    const resolved = await resolveSteeringTarget(layout, normalized.planId);
+    const resolved = await resolveSteeringTarget(layout, planIdInput);
     if (resolved.error) return resolved;
     const planId = resolved.planId;
+    const ownership = await enforceOwnershipForSteering(layout, planId);
+    if (ownership.error) return ownership;
+    if (ownership.owned) {
+      if (!proof.present) {
+        return error(
+          "NOT_AUTHORITATIVE_PHASE",
+          `NOT AUTHORITATIVE PHASE: plan ${JSON.stringify(planId)} is owned by phase ${JSON.stringify(ownership.record.phase)} session ${JSON.stringify(ownership.record.session)}; check requires the authoritative phase, session, and generation.`,
+        );
+      }
+      const fencing = checkOwnerFencing(ownership.record, proof.phase, proof.session, proof.generation);
+      if (fencing) {
+        if (fencing.error.code === "STALE_GENERATION") {
+          return error(
+            "NOT_AUTHORITATIVE_PHASE",
+            `NOT AUTHORITATIVE PHASE: stale generation ${JSON.stringify(proof.generation)} for plan ${JSON.stringify(planId)}; authoritative generation is ${ownership.record.generation}.`,
+          );
+        }
+        return fencing;
+      }
+    }
 
     // Lightweight: list entry names plus checkpoint only; never load bodies.
     const entriesDir = steeringEntriesDir(layout, planId);
@@ -1395,15 +2266,54 @@ export function createStateService(options = {}) {
   }
 
   async function readSteering(input) {
-    const normalized = normalizeSteeringTargetInput(input);
-    if (normalized.invalid) {
-      return error("INVALID_REQUEST", "Steering read accepts only an explicit planId string or an object with optional planId.");
+    let planIdInput;
+    let proof = { present: false };
+    if (input !== null && typeof input === "object" && !Array.isArray(input) && ("phase" in input || "session" in input || "generation" in input)) {
+      const parsed = parseOwnershipProof(input);
+      if (parsed.invalid) {
+        return parsed.failure ?? error("INVALID_REQUEST", "Steering read ownership proof requires phase, session, and generation together.");
+      }
+      proof = parsed;
+      if (!("planId" in input)) {
+        return error("INVALID_REQUEST", "Steering read with ownership proof requires an explicit planId.");
+      }
+      const extra = Object.keys(input).filter((key) => key !== "planId" && key !== "phase" && key !== "session" && key !== "generation");
+      if (extra.length > 0) {
+        return error("INVALID_REQUEST", "Steering read accepts only planId plus optional ownership proof (phase, session, generation).");
+      }
+      planIdInput = input.planId;
+    } else {
+      const normalized = normalizeSteeringTargetInput(input);
+      if (normalized.invalid) {
+        return error("INVALID_REQUEST", "Steering read accepts only an explicit planId string or an object with optional planId.");
+      }
+      planIdInput = normalized.planId;
     }
     const layout = await resolveRepositoryLayout();
     if (layout.error) return layout;
-    const resolved = await resolveSteeringTarget(layout, normalized.planId);
+    const resolved = await resolveSteeringTarget(layout, planIdInput);
     if (resolved.error) return resolved;
     const planId = resolved.planId;
+    const ownership = await enforceOwnershipForSteering(layout, planId);
+    if (ownership.error) return ownership;
+    if (ownership.owned) {
+      if (!proof.present) {
+        return error(
+          "NOT_AUTHORITATIVE_PHASE",
+          `NOT AUTHORITATIVE PHASE: plan ${JSON.stringify(planId)} is owned by phase ${JSON.stringify(ownership.record.phase)} session ${JSON.stringify(ownership.record.session)}; read requires the authoritative phase, session, and generation.`,
+        );
+      }
+      const fencing = checkOwnerFencing(ownership.record, proof.phase, proof.session, proof.generation);
+      if (fencing) {
+        if (fencing.error.code === "STALE_GENERATION") {
+          return error(
+            "NOT_AUTHORITATIVE_PHASE",
+            `NOT AUTHORITATIVE PHASE: stale generation ${JSON.stringify(proof.generation)} for plan ${JSON.stringify(planId)}; authoritative generation is ${ownership.record.generation}.`,
+          );
+        }
+        return fencing;
+      }
+    }
 
     // Ordered exact unread with no mutation: no lock, no journal, no
     // checkpoint write; only reads.
@@ -1462,9 +2372,14 @@ export function createStateService(options = {}) {
     if (input === null || typeof input !== "object" || Array.isArray(input)) {
       return error("INVALID_REQUEST", "Steering consume requires an object with planId and ids.");
     }
+    // M3 gated form adds ownership proof plus mandatory sync disposition:
+    // planId, ids, phase, session, generation, syncPoint, disposition.
+    // M2 form (planId plus ids only) is preserved for targets without an
+    // ownership record.
+    const gatedKeys = new Set(["planId", "ids", "phase", "session", "generation", "syncPoint", "disposition"]);
     const keys = Object.keys(input);
-    if (keys.some((key) => key !== "planId" && key !== "ids")) {
-      return error("INVALID_REQUEST", "Steering consume accepts only planId plus ids.");
+    if (keys.some((key) => !gatedKeys.has(key))) {
+      return error("INVALID_REQUEST", "Steering consume accepts only planId, ids, and optional ownership proof plus sync disposition (phase, session, generation, syncPoint, disposition).");
     }
     const idsFailure = validateSteeringIds(input.ids);
     if (idsFailure) return idsFailure;
@@ -1472,12 +2387,76 @@ export function createStateService(options = {}) {
       const planIdFailure = validatePlanId(input.planId);
       if (planIdFailure) return planIdFailure;
     }
+    const hasProof = "phase" in input || "session" in input || "generation" in input || "syncPoint" in input || "disposition" in input;
+    let proof = { present: false };
+    let syncClaim = null;
+    if (hasProof) {
+      const parsed = parseOwnershipProof(input);
+      if (parsed.invalid) {
+        return parsed.failure ?? error("INVALID_REQUEST", "Steering consume ownership proof requires phase, session, and generation together.");
+      }
+      proof = parsed;
+      if (!proof.present) {
+        return error("INVALID_REQUEST", "Steering consume with sync disposition requires phase, session, and generation together.");
+      }
+      if (!("syncPoint" in input && "disposition" in input)) {
+        return error("INVALID_REQUEST", "Steering consume with ownership proof requires syncPoint and disposition; disposition is recorded before consume.");
+      }
+      const pointFailure = validateSyncPoint(input.syncPoint);
+      if (pointFailure) return pointFailure;
+      const dispositionFailure = validateDisposition(input.disposition);
+      if (dispositionFailure) return dispositionFailure;
+      syncClaim = { syncPoint: input.syncPoint, disposition: input.disposition };
+      if (input.planId === undefined) {
+        return error("INVALID_REQUEST", "Steering consume with ownership proof requires an explicit planId.");
+      }
+    }
 
     const layout = await resolveRepositoryLayout();
     if (layout.error) return layout;
     const resolved = await resolveSteeringTarget(layout, input.planId);
     if (resolved.error) return resolved;
     const planId = resolved.planId;
+    const ownership = await enforceOwnershipForSteering(layout, planId);
+    if (ownership.error) return ownership;
+    if (ownership.owned) {
+      if (!proof.present || !syncClaim) {
+        return error(
+          "NOT_AUTHORITATIVE_PHASE",
+          `NOT AUTHORITATIVE PHASE: plan ${JSON.stringify(planId)} is owned by phase ${JSON.stringify(ownership.record.phase)} session ${JSON.stringify(ownership.record.session)}; consume requires the authoritative phase, session, generation, plus recorded sync disposition before consume.`,
+        );
+      }
+      const fencing = checkOwnerFencing(ownership.record, proof.phase, proof.session, proof.generation);
+      if (fencing) {
+        if (fencing.error.code === "STALE_GENERATION") {
+          return error(
+            "NOT_AUTHORITATIVE_PHASE",
+            `NOT AUTHORITATIVE PHASE: stale generation ${JSON.stringify(proof.generation)} for plan ${JSON.stringify(planId)}; authoritative generation is ${ownership.record.generation}.`,
+          );
+        }
+        return fencing;
+      }
+      // Disposition must already be recorded for this sync point and
+      // generation before consume advances the checkpoint (idempotent).
+      const syncPath = ownershipSyncPath(layout, planId);
+      const currentSync = readOwnershipSyncFile(syncPath, layout, planId);
+      if (currentSync.error) return currentSync;
+      const recorded = currentSync.sync.points[syncClaim.syncPoint];
+      if (
+        !recorded ||
+        recorded.generation !== proof.generation ||
+        recorded.disposition !== syncClaim.disposition ||
+        recorded.phase !== proof.phase ||
+        recorded.session !== proof.session
+      ) {
+        return error(
+          "SYNC_REQUIRED",
+          `Disposition ${JSON.stringify(syncClaim.disposition)} for sync point ${JSON.stringify(syncClaim.syncPoint)} must be recorded by the authoritative owner before consume; call ownership sync first.`,
+        );
+      }
+    } else if (syncClaim) {
+      return error("INVALID_REQUEST", "Steering consume sync disposition requires an ownership record; claim ownership first.");
+    }
 
     const entriesDir = steeringEntriesDir(layout, planId);
     const checkpointPath = steeringCheckpointPath(layout, planId);
@@ -1532,7 +2511,15 @@ export function createStateService(options = {}) {
         // Checkpoint is already durable; journal cleanup is recovered next time.
       }
       const unread = sequenceToId.size - merged.size;
-      return { ok: true, planId, checkpoint: { highestContiguous: highest, consumedIds: [...merged].sort() }, unread };
+      // Steering never authorizes consequential actions; existing approvals
+      // still required. This denial rides every consume, owned or not.
+      return {
+        ok: true,
+        planId,
+        checkpoint: { highestContiguous: highest, consumedIds: [...merged].sort() },
+        unread,
+        consequentialAuthorization: consequentialDenial(),
+      };
     } finally {
       releaseSteeringLock(lockPath, acquired.claim);
     }
@@ -1550,10 +2537,41 @@ export function createStateService(options = {}) {
     checkSteering,
     readSteering,
     consumeSteering,
+    claimOwnership,
+    readOwnership,
+    recordSync,
+    readSync,
+    recordSnapshot,
+    routeCorrection,
+    consequentialPolicy: () => ({ ...consequentialDenial(), deniedActions: [...CONSEQUENTIAL_DENIED_ACTIONS] }),
     listSteeringTargets: async () => {
       const layout = await resolveRepositoryLayout();
       if (layout.error) return layout;
       return listSteeringTargets(layout);
+    },
+    listOwnershipTargets: async () => {
+      const layout = await resolveRepositoryLayout();
+      if (layout.error) return layout;
+      const root = path.join(layout.identity, STATE_DIR, OWNERSHIP_DIR);
+      let names;
+      try {
+        names = fs.readdirSync(root);
+      } catch (cause) {
+        if (cause?.code === "ENOENT") return { ok: true, targets: [] };
+        return error("READ_FAILED", `Unable to list ownership targets: ${processErrorDetail(cause)}`, true);
+      }
+      const targets = [];
+      for (const name of names) {
+        if (!PLAN_ID_PATTERN.test(name)) continue;
+        try {
+          if (!fs.statSync(path.join(root, name)).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        targets.push(name);
+      }
+      targets.sort();
+      return { ok: true, targets };
     },
   };
 }

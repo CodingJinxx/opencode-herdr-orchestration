@@ -7,6 +7,11 @@ import {
   DEVELOPER_AGENT,
   mergeAgent,
   ORCHESTRATION_ROLES,
+  OWNERSHIP_TOOL_ACCESS,
+  OWNERSHIP_TOOLS,
+  RAW_STEERING_TOOL_ACCESS,
+  RAW_STEERING_TOOLS,
+  SHEPHERD_PHASES,
   STATE_TOOL_ACCESS,
   STEERING_TOOL_ACCESS,
   STEERING_TOOLS,
@@ -482,4 +487,65 @@ test("never spawns Developer through any flock spawn matrix", () => {
   for (const role of ORCHESTRATION_ROLES) {
     assert.equal(agents[role].permission.bash?.[pattern], undefined, `${role} must not spawn ${DEVELOPER_AGENT}`);
   }
+});
+
+test("M3 shepherd-only raw steering and ownership tools with explicit worker denials in code", () => {
+  const agents = createAgents();
+  assert.deepEqual([...SHEPHERD_PHASES].sort(), ["shepherd", "shepherd-governor"]);
+  for (const name of Object.values(RAW_STEERING_TOOLS)) {
+    assert.equal(agents.shepherd.permission[name], "allow", `shepherd must allow ${name}`);
+    assert.equal(agents["shepherd-governor"].permission[name], "allow", `governor must allow ${name}`);
+    for (const role of ["sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+      assert.equal(agents[role].permission[name], "deny", `${role} must deny ${name} in code`);
+    }
+  }
+  for (const name of Object.values(OWNERSHIP_TOOLS)) {
+    assert.equal(agents.shepherd.permission[name], "allow", `shepherd must allow ${name}`);
+    assert.equal(agents["shepherd-governor"].permission[name], "allow", `governor must allow ${name}`);
+    for (const role of ["sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+      assert.equal(agents[role].permission[name], "deny", `${role} must deny ${name} in code`);
+    }
+  }
+  // Sheepdog is explicitly denied every raw steering tool (not only via prompts).
+  for (const name of Object.values(RAW_STEERING_TOOLS)) {
+    assert.ok(name in agents.sheepdog.permission, `sheepdog permission must list ${name}`);
+  }
+});
+
+test("M3 keeps raw and ownership parity between static permissions and runtime allowlists", async () => {
+  const { createOwnershipTools, createRawSteeringTools } = await import("../src/index.js");
+  const { tmpdir } = await import("node:os");
+  const rawTools = createRawSteeringTools({ cwd: tmpdir() });
+  const ownershipTools = createOwnershipTools({ cwd: tmpdir() });
+  for (const [name, allowed] of RAW_STEERING_TOOL_ACCESS) {
+    assert.ok(rawTools[name], `plugin registers ${name}`);
+    assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+    for (const role of ORCHESTRATION_ROLES) {
+      const expected = allowed.has(role) ? "allow" : "deny";
+      assert.equal(createAgents()[role].permission[name], expected, `${role} static ${name} must be ${expected}`);
+    }
+  }
+  for (const [name, allowed] of OWNERSHIP_TOOL_ACCESS) {
+    assert.ok(ownershipTools[name], `plugin registers ${name}`);
+    assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+    for (const role of ORCHESTRATION_ROLES) {
+      const expected = allowed.has(role) ? "allow" : "deny";
+      assert.equal(createAgents()[role].permission[name], expected, `${role} static ${name} must be ${expected}`);
+    }
+  }
+  // Developer remains absent from shepherd tool allowlists.
+  for (const allowed of [...RAW_STEERING_TOOL_ACCESS.values(), ...OWNERSHIP_TOOL_ACCESS.values()]) {
+    assert.ok(!allowed.has(DEVELOPER_AGENT));
+  }
+});
+
+test("M3 prompts own raw steering for shepherd phases and deny it for workers", async () => {
+  const { SHEPHERD_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEEPDOG_PROMPT, GRAZER_PROMPT, SHEEP_PROMPT } = await import("../src/prompts.js");
+  assert.match(SHEPHERD_PROMPT, /Only the recorded owner phase/);
+  assert.match(SHEPHERD_PROMPT, /NOT AUTHORITATIVE PHASE/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /NOT AUTHORITATIVE PHASE/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never raw records/);
+  assert.match(SHEEPDOG_PROMPT, /never yours to read directly|denied those tools/);
+  assert.match(GRAZER_PROMPT, /not yours/);
+  assert.match(SHEEP_PROMPT, /not yours/);
 });

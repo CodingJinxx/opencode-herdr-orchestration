@@ -6,7 +6,19 @@ import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { ARTIFACT_TYPES, createStateService, MAX_STEERING_BYTES, STEERING_SCHEMA_VERSION } from "../src/state.js";
+import {
+  ARTIFACT_TYPES,
+  CONSEQUENTIAL_DENIED_ACTIONS,
+  createStateService,
+  LIFECYCLE_STATES,
+  MAX_STEERING_BYTES,
+  OWNER_PHASES,
+  OWNERSHIP_SCHEMA_VERSION,
+  SNAPSHOT_STAGES,
+  SYNC_DISPOSITIONS,
+  SYNC_POINTS,
+  STEERING_SCHEMA_VERSION,
+} from "../src/state.js";
 
 const FIXED_TIME = new Date("2026-08-31T12:00:00.000Z");
 
@@ -1055,4 +1067,439 @@ test("steering recovers a stale scoped lock and a torn journal without losing du
   assert.equal(fs.existsSync(path.join(targetDir, "queue.journal")), false);
   const read = await state.readSteering("recover-plan");
   assert.deepEqual(read.entries.map((entry) => entry.sequence), [1, 2]);
+});
+
+// --- M3 Shepherd ownership, lifecycle, and semantic synchronization ----------
+
+function ownershipInput(planId, overrides = {}) {
+  return {
+    planId,
+    phase: OWNER_PHASES.PLANNING,
+    session: "ses_planning_01",
+    generation: 1,
+    milestone: "milestone-01",
+    lifecycleState: LIFECYCLE_STATES.PLANNING,
+    currentObjective: "Bounded objective summary.",
+    currentAction: "Bounded action summary.",
+    activeSheepdogTarget: "",
+    relevantRevision: "abc123",
+    pendingConsequentialAction: "",
+    ...overrides,
+  };
+}
+
+function ownershipRootFor(repo, planId) {
+  return path.join(repo.commonDir, "flocky", "ownership", planId);
+}
+
+test("M3 lifecycle records validate bounded fields with closed vocabulary and no transcript content", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const claimed = await state.claimOwnership(ownershipInput("m3-lifecycle-01"));
+  assert.equal(claimed.ok, true);
+  const record = claimed.ownership;
+  assert.equal(record.schema, OWNERSHIP_SCHEMA_VERSION);
+  assert.equal(record.planId, "m3-lifecycle-01");
+  assert.equal(record.phase, "planning");
+  assert.equal(record.session, "ses_planning_01");
+  assert.equal(record.generation, 1);
+  assert.equal(record.milestone, "milestone-01");
+  assert.equal(record.lifecycleState, "planning");
+  assert.equal(record.currentObjective, "Bounded objective summary.");
+  assert.equal(record.identity, repo.commonDir);
+  assert.ok(Number.isFinite(Date.parse(record.updatedAt)));
+  assert.ok(!JSON.stringify(record).toLowerCase().includes("transcript"));
+  assert.ok(!JSON.stringify(record).toLowerCase().includes("scrollback"));
+  assert.ok(fs.existsSync(path.join(ownershipRootFor(repo, "m3-lifecycle-01"), "record.json")));
+
+  // Closed vocabularies reject unknown values without filesystem mutation for new targets.
+  const badPhase = await state.claimOwnership(ownershipInput("m3-bad-phase", { phase: "shepherd" }));
+  assert.equal(badPhase.ok, false);
+  assert.equal(badPhase.error.code, "INVALID_OWNER_PHASE");
+  const badState = await state.claimOwnership(ownershipInput("m3-bad-state", { lifecycleState: "flying" }));
+  assert.equal(badState.ok, false);
+  assert.equal(badState.error.code, "INVALID_LIFECYCLE_STATE");
+  const badSync = await state.claimOwnership(ownershipInput("m3-lifecycle-01", { generation: 2, session: "ses_planning_01", phase: "planning" }));
+  // Same plan with valid handoff shape succeeds; invalid shapes above never created new targets.
+  assert.equal(badSync.ok, true);
+  assert.equal(fs.existsSync(ownershipRootFor(repo, "m3-bad-phase")), false);
+});
+
+test("M3 sensitive data exclusion rejects transcript and scrollback in lifecycle fields", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  for (const field of ["currentObjective", "currentAction", "pendingConsequentialAction", "milestone"]) {
+    const failure = await state.claimOwnership(
+      ownershipInput(`m3-sensitive-${field}`, { [field]: `contains reasoning TRANSCRIPT dump ${field}` }),
+    );
+    assert.equal(failure.ok, false, `${field} with transcript must be rejected`);
+    assert.equal(failure.error.code, "SENSITIVE_CONTENT_EXCLUDED");
+    const scrollback = await state.claimOwnership(
+      ownershipInput(`m3-scroll-${field}`, { [field]: `terminal scrollback snapshot ${field}` }),
+    );
+    assert.equal(scrollback.ok, false);
+    assert.equal(scrollback.error.code, "SENSITIVE_CONTENT_EXCLUDED");
+  }
+  assert.equal(fs.existsSync(path.join(repo.commonDir, "flocky", "ownership", "m3-sensitive-currentObjective", "record.json")), false);
+});
+
+test("M3 planning to governance handoff fences session plus generation and denies non-owners", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-handoff-01";
+  await state.submitSteering({ planId, content: "Developer directive one." });
+  const planning = await state.claimOwnership(ownershipInput(planId));
+  assert.equal(planning.ok, true);
+
+  // Owner may check, read, and sync; non-owner gets NOT AUTHORITATIVE PHASE with no bodies loaded.
+  const ownerCheck = await state.checkSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+  assert.equal(ownerCheck.ok, true);
+  assert.equal(ownerCheck.unread, 1);
+  const ownerRead = await state.readSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+  assert.equal(ownerRead.ok, true);
+  assert.equal(ownerRead.entries.length, 1);
+
+  const deniedCheck = await state.checkSteering({ planId, phase: "governance", session: "ses_governance_99", generation: 1 });
+  assert.equal(deniedCheck.ok, false);
+  assert.equal(deniedCheck.error.code, "NOT_AUTHORITATIVE_PHASE");
+  assert.match(deniedCheck.error.message, /NOT AUTHORITATIVE PHASE/);
+  const deniedRead = await state.readSteering({ planId, phase: "governance", session: "ses_governance_99", generation: 1 });
+  assert.equal(deniedRead.error.code, "NOT_AUTHORITATIVE_PHASE");
+  const noProof = await state.checkSteering(planId);
+  assert.equal(noProof.error.code, "NOT_AUTHORITATIVE_PHASE");
+
+  // Stale generation is also not authoritative.
+  const stale = await state.checkSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 99 });
+  assert.equal(stale.error.code, "NOT_AUTHORITATIVE_PHASE");
+
+  // Handoff to governance with incremented generation succeeds; old generation loses authority.
+  const handoff = await state.claimOwnership(
+    ownershipInput(planId, { phase: "governance", session: "ses_governance_01", generation: 2, lifecycleState: "executing" }),
+  );
+  assert.equal(handoff.ok, true);
+  assert.equal(handoff.ownership.phase, "governance");
+  const oldOwner = await state.checkSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+  assert.equal(oldOwner.error.code, "NOT_AUTHORITATIVE_PHASE");
+  const newOwner = await state.checkSteering({ planId, phase: "governance", session: "ses_governance_01", generation: 2 });
+  assert.equal(newOwner.ok, true);
+
+  // Ownership read is likewise fenced.
+  const ownerGet = await state.readOwnership({ planId, phase: "governance", session: "ses_governance_01" });
+  assert.equal(ownerGet.ok, true);
+  const deniedGet = await state.readOwnership({ planId, phase: "planning", session: "ses_planning_01" });
+  assert.equal(deniedGet.error.code, "NOT_AUTHORITATIVE_PHASE");
+});
+
+test("M3 both phases cannot race on the same generation", async () => {
+  const repo = repository();
+  const planId = "m3-race-01";
+  const attempt = (phase, session) =>
+    service({ cwd: repo.cwd }).claimOwnership(ownershipInput(planId, { phase, session, generation: 1 }));
+  const results = await Promise.all([
+    attempt("planning", "ses_planning_race"),
+    attempt("governance", "ses_governance_race"),
+  ]);
+  const winners = results.filter((result) => result.ok);
+  const losers = results.filter((result) => !result.ok);
+  assert.equal(winners.length, 1, "exactly one phase wins the first generation");
+  assert.equal(losers.length, 1);
+  assert.equal(losers[0].error.code, "STALE_GENERATION");
+  const stored = JSON.parse(fs.readFileSync(path.join(ownershipRootFor(repo, planId), "record.json"), "utf8"));
+  assert.equal(stored.generation, 1);
+  assert.ok(["planning", "governance"].includes(stored.phase));
+  // The loser retries with the next generation and succeeds as a handoff.
+  const retry = await service({ cwd: repo.cwd }).claimOwnership(
+    ownershipInput(planId, {
+      phase: stored.phase === "planning" ? "governance" : "planning",
+      session: stored.phase === "planning" ? "ses_governance_race2" : "ses_planning_race2",
+      generation: 2,
+    }),
+  );
+  assert.equal(retry.ok, true);
+  assert.equal(retry.ownership.generation, 2);
+});
+
+test("M3 submission during milestone with consumption after sheepdog yields", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-milestone-flow";
+  // Planning claims with an active sheepdog target and records milestone-executing.
+  const claimed = await state.claimOwnership(
+    ownershipInput(planId, { lifecycleState: "executing", activeSheepdogTarget: "sheep_milestone_01" }),
+  );
+  assert.equal(claimed.ok, true);
+  const executing = await state.recordSync({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    syncPoint: SYNC_POINTS.MILESTONE_EXECUTING,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(executing.ok, true);
+
+  // Developer submits during the milestone while sheepdog is still active.
+  const submitted = await state.submitSteering({ planId, content: "Steer during milestone." });
+  assert.equal(submitted.ok, true);
+
+  // Consume requires disposition first: without sync it fails closed.
+  const withoutSync = await state.consumeSteering({ planId, ids: [submitted.entry.id], phase: "planning", session: "ses_planning_01", generation: 1, syncPoint: SYNC_POINTS.RESULT_RECEIVED, disposition: SYNC_DISPOSITIONS.INTEGRATED });
+  assert.equal(withoutSync.error.code, "SYNC_REQUIRED");
+
+  // Sheepdog yields: ownership clears the active target with a newer generation, then result-received.
+  const yielded = await state.claimOwnership(
+    ownershipInput(planId, { generation: 2, lifecycleState: "result-evaluation", activeSheepdogTarget: "" }),
+  );
+  assert.equal(yielded.ok, true);
+  const received = await state.recordSync({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    syncPoint: SYNC_POINTS.RESULT_RECEIVED,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(received.ok, true);
+  const consumed = await state.consumeSteering({
+    planId,
+    ids: [submitted.entry.id],
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    syncPoint: SYNC_POINTS.RESULT_RECEIVED,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(consumed.ok, true);
+  assert.deepEqual(consumed.checkpoint.consumedIds, [submitted.entry.id]);
+  // Idempotent second consume with the same disposition succeeds without advancing differently.
+  const again = await state.consumeSteering({
+    planId,
+    ids: [submitted.entry.id],
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    syncPoint: SYNC_POINTS.RESULT_RECEIVED,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(again.ok, true);
+  assert.deepEqual(again.checkpoint.consumedIds, consumed.checkpoint.consumedIds);
+});
+
+test("M3 each mandatory sync point records disposition before idempotent consume", async () => {
+  const points = [
+    SYNC_POINTS.PLANNING_START,
+    SYNC_POINTS.PRE_PLAN,
+    SYNC_POINTS.PRE_ASSIGNMENT,
+    SYNC_POINTS.MILESTONE_EXECUTING,
+    SYNC_POINTS.RESULT_RECEIVED,
+    SYNC_POINTS.CONTINUE,
+    SYNC_POINTS.FINALIZE,
+  ];
+  for (const point of points) {
+    const repo = repository();
+    const state = service({ cwd: repo.cwd });
+    const planId = "m3-sync-each";
+    await state.submitSteering({ planId, content: `Directive for ${point}.` });
+    await state.claimOwnership(ownershipInput(planId));
+    const read = await state.readSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+    assert.equal(read.entries.length, 1);
+    const synced = await state.recordSync({
+      planId,
+      phase: "planning",
+      session: "ses_planning_01",
+      generation: 1,
+      syncPoint: point,
+      disposition: SYNC_DISPOSITIONS.INTEGRATED,
+      note: `Semantic note for ${point}.`,
+    });
+    assert.equal(synced.ok, true, `sync ${point} must succeed`);
+    assert.equal(synced.sync.syncPoint, point);
+    const consumed = await state.consumeSteering({
+      planId,
+      ids: [read.entries[0].id],
+      phase: "planning",
+      session: "ses_planning_01",
+      generation: 1,
+      syncPoint: point,
+      disposition: SYNC_DISPOSITIONS.INTEGRATED,
+    });
+    assert.equal(consumed.ok, true, `consume after ${point} must succeed`);
+    const reread = await state.readSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+    assert.equal(reread.entries.length, 0);
+  }
+  // Consequential-preparation requires pending action first.
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-sync-consequential";
+  await state.claimOwnership(ownershipInput(planId));
+  const missing = await state.recordSync({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    syncPoint: SYNC_POINTS.CONSEQUENTIAL_PREPARATION,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(missing.error.code, "PENDING_CONSEQUENTIAL_REQUIRED");
+  const withPending = await state.claimOwnership(
+    ownershipInput(planId, { generation: 2, pendingConsequentialAction: "Merge squad branch locally after checks." }),
+  );
+  assert.equal(withPending.ok, true);
+  const ready = await state.recordSync({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    syncPoint: SYNC_POINTS.CONSEQUENTIAL_PREPARATION,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(ready.ok, true);
+});
+
+test("M3 snapshots cover four stages with pending gating and no transcript content", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-snapshot-01";
+  await state.claimOwnership(ownershipInput(planId));
+  for (const stage of [SNAPSHOT_STAGES.PLANNING, SNAPSHOT_STAGES.EXECUTING, SNAPSHOT_STAGES.RESULT_EVALUATION]) {
+    const snapshot = await state.recordSnapshot({ planId, phase: "planning", session: "ses_planning_01", generation: 1, stage });
+    assert.equal(snapshot.ok, true, `snapshot ${stage} must succeed`);
+    assert.equal(snapshot.snapshot.stage, stage);
+    assert.ok(!JSON.stringify(snapshot.snapshot).toLowerCase().includes("transcript"));
+  }
+  const missing = await state.recordSnapshot({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    stage: SNAPSHOT_STAGES.CONSEQUENTIAL_PREPARATION,
+  });
+  assert.equal(missing.error.code, "PENDING_CONSEQUENTIAL_REQUIRED");
+  await state.claimOwnership(ownershipInput(planId, { generation: 2, pendingConsequentialAction: "Local merge only after governor checks." }));
+  const ready = await state.recordSnapshot({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    stage: SNAPSHOT_STAGES.CONSEQUENTIAL_PREPARATION,
+  });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.snapshot.pendingConsequentialAction, "Local merge only after governor checks.");
+  const rejected = await state.recordSnapshot({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 2,
+    stage: SNAPSHOT_STAGES.PLANNING,
+    currentObjective: "reasoning transcript dump",
+  });
+  assert.equal(rejected.error.code, "SENSITIVE_CONTENT_EXCLUDED");
+});
+
+test("M3 semantic correction routes normal instructions never raw records", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-correction-01";
+  await state.claimOwnership(ownershipInput(planId));
+  const routed = await state.routeCorrection({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    correction: "Sheepdog: re-scope ownership to non-overlapping paths and re-run deterministic checks before review.",
+    syncPoint: SYNC_POINTS.CONTINUE,
+  });
+  assert.equal(routed.ok, true);
+  assert.equal(routed.correction.target, "sheepdog");
+  assert.equal(routed.correction.channel, "normal-corrective-instructions");
+  assert.deepEqual(routed.consequentialAuthorization, {
+    push: false,
+    tag: false,
+    publish: false,
+    deploy: false,
+    merge: false,
+    anyConsequential: false,
+    approvalsStillRequired: true,
+    note: "Steering never authorizes push, tag, publish, deploy, merge, or any consequential action; existing approvals still required.",
+  });
+  const raw = await state.routeCorrection({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    correction: JSON.stringify({ sequence: 1, id: "st_abcdef1234567890", content: "raw dump", consumedIds: [] }),
+  });
+  assert.equal(raw.ok, false);
+  assert.equal(raw.error.code, "RAW_RECORD_REJECTED");
+  const sensitive = await state.routeCorrection({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    correction: "Here is the full scrollback for context.",
+  });
+  assert.equal(sensitive.error.code, "SENSITIVE_CONTENT_EXCLUDED");
+  const denied = await state.routeCorrection({
+    planId,
+    phase: "governance",
+    session: "ses_governance_01",
+    generation: 1,
+    correction: "Valid but non-owner correction.",
+  });
+  assert.equal(denied.error.code, "NOT_AUTHORITATIVE_PHASE");
+});
+
+test("M3 steering never authorizes consequential actions with approvals still required", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "m3-consequential-01";
+  await state.submitSteering({ planId, content: "Please push and deploy now." });
+  await state.claimOwnership(ownershipInput(planId));
+  await state.recordSync({
+    planId,
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    syncPoint: SYNC_POINTS.PRE_PLAN,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  const read = await state.readSteering({ planId, phase: "planning", session: "ses_planning_01", generation: 1 });
+  const consumed = await state.consumeSteering({
+    planId,
+    ids: [read.entries[0].id],
+    phase: "planning",
+    session: "ses_planning_01",
+    generation: 1,
+    syncPoint: SYNC_POINTS.PRE_PLAN,
+    disposition: SYNC_DISPOSITIONS.INTEGRATED,
+  });
+  assert.equal(consumed.ok, true);
+  for (const action of CONSEQUENTIAL_DENIED_ACTIONS) {
+    assert.equal(consumed.consequentialAuthorization[action], false, `steering must never authorize ${action}`);
+  }
+  assert.equal(consumed.consequentialAuthorization.anyConsequential, false);
+  assert.equal(consumed.consequentialAuthorization.approvalsStillRequired, true);
+  const policy = await state.consequentialPolicy();
+  assert.deepEqual([...policy.deniedActions].sort(), ["deploy", "merge", "publish", "push", "tag"]);
+  const snapshot = await state.recordSnapshot({ planId, phase: "planning", session: "ses_planning_01", generation: 1, stage: SNAPSHOT_STAGES.PLANNING });
+  assert.equal(snapshot.snapshot.consequentialAuthorization.anyConsequential, false);
+  assert.equal(snapshot.snapshot.consequentialAuthorization.approvalsStillRequired, true);
+});
+
+test("M3 M2 regression: targets without ownership keep raw M2 behavior", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const submitted = await state.submitSteering({ planId: "m3-regression-01", content: "M2 content still works." });
+  assert.equal(submitted.ok, true);
+  const check = await state.checkSteering("m3-regression-01");
+  assert.equal(check.ok, true);
+  assert.equal(check.unread, 1);
+  const read = await state.readSteering("m3-regression-01");
+  assert.equal(read.entries.length, 1);
+  const consumed = await state.consumeSteering({ planId: "m3-regression-01", ids: [submitted.entry.id] });
+  assert.equal(consumed.ok, true);
+  assert.equal(consumed.checkpoint.highestContiguous, 1);
+  // M2 invalid shapes still fail the same way.
+  const bad = await state.submitSteering({ planId: "m3-regression-01", content: "", extra: "nope" });
+  assert.equal(bad.error.code, "INVALID_REQUEST");
 });

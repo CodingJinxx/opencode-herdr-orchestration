@@ -7,8 +7,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
-import plugin, { createSteeringTools } from "../src/index.js";
-import { DEVELOPER_AGENT, STATE_TOOLS, STEERING_TOOL_ACCESS, STEERING_TOOLS } from "../src/agents.js";
+import plugin, { createOwnershipTools, createRawSteeringTools, createSteeringTools } from "../src/index.js";
+import {
+  DEVELOPER_AGENT,
+  OWNERSHIP_TOOL_ACCESS,
+  OWNERSHIP_TOOLS,
+  RAW_STEERING_TOOL_ACCESS,
+  RAW_STEERING_TOOLS,
+  STATE_TOOLS,
+  STEERING_TOOL_ACCESS,
+  STEERING_TOOLS,
+} from "../src/agents.js";
 import * as packageEntry from "../src/plugin.js";
 
 function realpath(value) {
@@ -479,5 +488,135 @@ test("steering exposes no herdr steer CLI and no package CLI steering command", 
   assert.ok(!Object.keys(packageJson.bin ?? {}).some((name) => /steer/i.test(name)), "package bin must not advertise a steering CLI");
   const hooks = await plugin({}, { state: { cwd: tmpdir() } });
   const names = Object.keys(hooks.tool);
-  assert.ok(!names.some((name) => name !== STEERING_TOOLS.submit && /steer/i.test(name)), "exactly one steering tool is registered");
+  // M2 submission tool plus M3 shepherd-only raw steering tools; no other steer-named tools.
+  const allowedSteer = new Set([STEERING_TOOLS.submit, ...Object.values(RAW_STEERING_TOOLS)]);
+  for (const name of names) {
+    if (/steer/i.test(name)) assert.ok(allowedSteer.has(name), `unexpected steer tool ${name}`);
+  }
+  for (const name of allowedSteer) assert.ok(names.includes(name), `plugin registers ${name}`);
+});
+
+// --- M3 Shepherd ownership plugin enforcement --------------------------------
+
+function m3Repository(prefix = "orchestration-m3-plugin-") {
+  const cwd = mkdtempSync(path.join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-q"], { cwd });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd });
+  execFileSync("git", ["commit", "--allow-empty", "-m", "initial", "-q"], { cwd });
+  return { cwd };
+}
+
+function m3Context(agent) {
+  const captured = [];
+  return {
+    context: {
+      agent,
+      abort: new AbortController().signal,
+      metadata(value) {
+        captured.push(value);
+      },
+    },
+    captured,
+  };
+}
+
+test("M3 registers shepherd-only raw steering and ownership lifecycle tools", async () => {
+  const hooks = await plugin({}, { state: { cwd: tmpdir() } });
+  for (const name of Object.values(RAW_STEERING_TOOLS)) assert.ok(hooks.tool[name], `plugin registers ${name}`);
+  for (const name of Object.values(OWNERSHIP_TOOLS)) assert.ok(hooks.tool[name], `plugin registers ${name}`);
+  assert.deepEqual([...RAW_STEERING_TOOL_ACCESS.keys()].sort(), [...Object.values(RAW_STEERING_TOOLS)].sort());
+  for (const allowed of RAW_STEERING_TOOL_ACCESS.values()) assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+  for (const allowed of OWNERSHIP_TOOL_ACCESS.values()) assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+});
+
+test("M3 raw steering and ownership tools deny sheepdog and all leaves plus developer in code", async () => {
+  const repo = m3Repository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const denied = ["sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium", "developer", "unknown", "none", "", null, undefined];
+  for (const agent of denied) {
+    for (const name of [...Object.values(RAW_STEERING_TOOLS), ...Object.values(OWNERSHIP_TOOLS)]) {
+      const { context } = m3Context(agent);
+      const args =
+        name === RAW_STEERING_TOOLS.consume
+          ? { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1, ids: ["st_x"], syncPoint: "pre-plan", disposition: "integrated" }
+          : name === OWNERSHIP_TOOLS.claim
+            ? { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1, milestone: "m", lifecycleState: "planning" }
+            : name === OWNERSHIP_TOOLS.sync
+              ? { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1, syncPoint: "pre-plan", disposition: "integrated" }
+              : name === OWNERSHIP_TOOLS.snapshot
+                ? { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1, stage: "planning" }
+                : name === OWNERSHIP_TOOLS.correct
+                  ? { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1, correction: "Do this." }
+                  : { planId: "m3-denied", phase: "planning", session: "ses_planning_01", generation: 1 };
+      const output = await hooks.tool[name].execute(args, context);
+      assert.equal(JSON.parse(output).error.code, "UNAUTHORIZED_AGENT", `${agent} must be denied ${name}`);
+    }
+  }
+  const ownershipRoot = path.join(realpath(path.resolve(repo.cwd, ".git")), "flocky", "ownership");
+  // No filesystem write on denial: ownership root never appears (steering root also absent).
+  assert.equal(fs.existsSync(ownershipRoot), false);
+});
+
+test("M3 shepherd ownership handoff via tools fences check read consume with NOT AUTHORITATIVE PHASE", async () => {
+  const repo = m3Repository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const submit = (agent, args) => hooks.tool[STEERING_TOOLS.submit].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+  const claim = (agent, args) => hooks.tool[OWNERSHIP_TOOLS.claim].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+  const check = (agent, args) => hooks.tool[RAW_STEERING_TOOLS.check].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+  const read = (agent, args) => hooks.tool[RAW_STEERING_TOOLS.read].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+  const sync = (agent, args) => hooks.tool[OWNERSHIP_TOOLS.sync].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+  const consume = (agent, args) => hooks.tool[RAW_STEERING_TOOLS.consume].execute(args, m3Context(agent).context).then((output) => JSON.parse(output));
+
+  const planId = "m3-tool-handoff";
+  assert.equal((await submit("developer", { planId, content: "Tool handoff directive." })).ok, true);
+  assert.equal((await claim("shepherd", { planId, phase: "planning", session: "ses_tool_plan", generation: 1, milestone: "m1", lifecycleState: "planning" })).ok, true);
+  const ownerCheck = await check("shepherd", { planId, phase: "planning", session: "ses_tool_plan", generation: 1 });
+  assert.equal(ownerCheck.ok, true);
+  const nonOwner = await check("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 1 });
+  assert.equal(nonOwner.error.code, "NOT_AUTHORITATIVE_PHASE");
+  assert.match(nonOwner.error.message, /NOT AUTHORITATIVE PHASE/);
+  const noProofDenied = await hooks.tool[RAW_STEERING_TOOLS.read].execute({ planId, phase: "planning", session: "ses_tool_plan", generation: 99 }, m3Context("shepherd").context).then((o) => JSON.parse(o));
+  assert.equal(noProofDenied.error.code, "NOT_AUTHORITATIVE_PHASE");
+
+  // Handoff then disposition before consume via tools.
+  assert.equal((await claim("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 2, milestone: "m1", lifecycleState: "executing" })).ok, true);
+  const staleOwner = await read("shepherd", { planId, phase: "planning", session: "ses_tool_plan", generation: 1 });
+  assert.equal(staleOwner.error.code, "NOT_AUTHORITATIVE_PHASE");
+  assert.equal((await sync("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 2, syncPoint: "pre-plan", disposition: "integrated" })).ok, true);
+  const unread = await read("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 2 });
+  assert.equal(unread.entries.length, 1);
+  const withoutSync = await consume("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 2, ids: [unread.entries[0].id], syncPoint: "continue", disposition: "integrated" });
+  assert.equal(withoutSync.error.code, "SYNC_REQUIRED");
+  const withSync = await consume("shepherd-governor", { planId, phase: "governance", session: "ses_tool_gov", generation: 2, ids: [unread.entries[0].id], syncPoint: "pre-plan", disposition: "integrated" });
+  assert.equal(withSync.ok, true);
+  assert.equal(withSync.consequentialAuthorization.anyConsequential, false);
+  assert.equal(withSync.consequentialAuthorization.approvalsStillRequired, true);
+});
+
+test("M3 correction routing via tools sends normal instructions never raw records", async () => {
+  const repo = m3Repository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const claim = (agent, args) => hooks.tool[OWNERSHIP_TOOLS.claim].execute(args, m3Context(agent).context).then((o) => JSON.parse(o));
+  const correct = (agent, args) => hooks.tool[OWNERSHIP_TOOLS.correct].execute(args, m3Context(agent).context).then((o) => JSON.parse(o));
+  const planId = "m3-tool-correct";
+  await claim("shepherd", { planId, phase: "planning", session: "ses_correct_01", generation: 1, milestone: "m", lifecycleState: "planning" });
+  const routed = await correct("shepherd", { planId, phase: "planning", session: "ses_correct_01", generation: 1, correction: "Sheepdog: narrow ownership and rerun checks." });
+  assert.equal(routed.ok, true);
+  assert.equal(routed.correction.target, "sheepdog");
+  const raw = await correct("shepherd", { planId, phase: "planning", session: "ses_correct_01", generation: 1, correction: '{"sequence": 1, "id": "st_abcdef1234567890"}' });
+  assert.equal(raw.error.code, "RAW_RECORD_REJECTED");
+  // Sheepdog cannot route corrections at all.
+  const denied = await correct("sheepdog", { planId, phase: "planning", session: "ses_correct_01", generation: 1, correction: "Try to correct." });
+  assert.equal(denied.error.code, "UNAUTHORIZED_AGENT");
+});
+
+test("M3 M2 regression via tools: developer submit still sole submitter", async () => {
+  const repo = m3Repository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const submit = (agent, args) => hooks.tool[STEERING_TOOLS.submit].execute(args, m3Context(agent).context).then((o) => JSON.parse(o));
+  assert.equal((await submit("developer", { planId: "m3-tool-regress", content: "Still developer only." })).ok, true);
+  for (const agent of ["shepherd", "shepherd-governor", "sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal((await submit(agent, { planId: "m3-tool-regress", content: "Denied." })).error.code, "UNAUTHORIZED_AGENT");
+  }
 });

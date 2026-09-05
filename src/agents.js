@@ -127,6 +127,46 @@ function steeringToolPermissions(allowedTools) {
   );
 }
 
+// Shepherd ownership raw steering plus lifecycle tools (M3). Only the two
+// Shepherd phases may check, read, or consume raw steering and only the
+// recorded owner phase plus session plus generation passes the state-level
+// fencing (NOT AUTHORITATIVE PHASE otherwise). Sheepdog and every leaf are
+// explicitly denied in code, not only in prompts; the runtime check in
+// src/index.js stays authoritative over static overrides.
+export const SHEPHERD_PHASES = Object.freeze(["shepherd", "shepherd-governor"]);
+export const RAW_STEERING_TOOLS = Object.freeze({
+  check: "herdr_steering_check",
+  read: "herdr_steering_read",
+  consume: "herdr_steering_consume",
+});
+export const OWNERSHIP_TOOLS = Object.freeze({
+  claim: "herdr_ownership_claim",
+  read: "herdr_ownership_read",
+  sync: "herdr_ownership_sync",
+  snapshot: "herdr_ownership_snapshot",
+  correct: "herdr_ownership_correct",
+});
+export const RAW_STEERING_TOOL_ACCESS = Object.freeze(
+  new Map(Object.values(RAW_STEERING_TOOLS).map((name) => [name, new Set(SHEPHERD_PHASES)])),
+);
+export const OWNERSHIP_TOOL_ACCESS = Object.freeze(
+  new Map(Object.values(OWNERSHIP_TOOLS).map((name) => [name, new Set(SHEPHERD_PHASES)])),
+);
+const ALL_RAW_STEERING_TOOLS = Object.freeze(Object.values(RAW_STEERING_TOOLS));
+const ALL_OWNERSHIP_TOOLS = Object.freeze(Object.values(OWNERSHIP_TOOLS));
+
+function rawSteeringToolPermissions(allowedTools) {
+  return Object.fromEntries(
+    ALL_RAW_STEERING_TOOLS.map((name) => [name, allowedTools.includes(name) ? "allow" : "deny"]),
+  );
+}
+
+function ownershipToolPermissions(allowedTools) {
+  return Object.fromEntries(
+    ALL_OWNERSHIP_TOOLS.map((name) => [name, allowedTools.includes(name) ? "allow" : "deny"]),
+  );
+}
+
 const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
 const GOVERNOR_STATE_TOOLS = [STATE_TOOLS.planRead];
 const SHEEPDOG_STATE_TOOLS = [
@@ -134,6 +174,8 @@ const SHEEPDOG_STATE_TOOLS = [
   STATE_TOOLS.executionWrite,
   STATE_TOOLS.executionRead,
 ];
+const SHEPHERD_RAW_STEERING_TOOLS = Object.values(RAW_STEERING_TOOLS);
+const SHEPHERD_OWNERSHIP_TOOLS = Object.values(OWNERSHIP_TOOLS);
 
 const SHEPHERD_SPAWNABLE_AGENTS = ["grazer"];
 const GOVERNOR_SPAWNABLE_AGENTS = ["grazer", "sheepdog"];
@@ -250,6 +292,8 @@ export function createAgents(options = {}) {
         herdr_agent_response: "allow",
         ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
         ...steeringToolPermissions([]),
+        ...rawSteeringToolPermissions(SHEPHERD_RAW_STEERING_TOOLS),
+        ...ownershipToolPermissions(SHEPHERD_OWNERSHIP_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -294,6 +338,8 @@ export function createAgents(options = {}) {
         herdr_agent_response: "allow",
         ...stateToolPermissions(GOVERNOR_STATE_TOOLS),
         ...steeringToolPermissions([]),
+        ...rawSteeringToolPermissions(SHEPHERD_RAW_STEERING_TOOLS),
+        ...ownershipToolPermissions(SHEPHERD_OWNERSHIP_TOOLS),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -360,6 +406,8 @@ export function createAgents(options = {}) {
         herdr_agent_response: "allow",
         ...stateToolPermissions(SHEEPDOG_STATE_TOOLS),
         ...steeringToolPermissions([]),
+        ...rawSteeringToolPermissions([]),
+        ...ownershipToolPermissions([]),
         bash: {
           "*": "deny",
           ...safeGitInspection,
@@ -390,6 +438,8 @@ export function createAgents(options = {}) {
         herdr_agent_response: "deny",
         ...stateToolPermissions([]),
         ...steeringToolPermissions([]),
+        ...rawSteeringToolPermissions([]),
+        ...ownershipToolPermissions([]),
         bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
         task: "deny",
       },
@@ -407,6 +457,8 @@ export function createAgents(options = {}) {
         herdr_agent_response: "deny",
         ...stateToolPermissions([]),
         ...steeringToolPermissions([]),
+        ...rawSteeringToolPermissions([]),
+        ...ownershipToolPermissions([]),
         bash: {
           "*": "allow",
           ...SHEEP_DENIALS,
@@ -447,6 +499,8 @@ function reviewerAgent(model, variant) {
       herdr_agent_response: "deny",
       ...stateToolPermissions([]),
       ...steeringToolPermissions([]),
+      ...rawSteeringToolPermissions([]),
+      ...ownershipToolPermissions([]),
       bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
       task: "deny",
     },
