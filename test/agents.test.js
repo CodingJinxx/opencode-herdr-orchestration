@@ -1,9 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { tmpdir } from "node:os";
 
-import { createAgents, mergeAgent, STATE_TOOL_ACCESS } from "../src/agents.js";
-import { createStateTools, modeForAgent } from "../src/index.js";
+import {
+  createAgents,
+  DEVELOPER_AGENT,
+  mergeAgent,
+  ORCHESTRATION_ROLES,
+  OWNERSHIP_TOOL_ACCESS,
+  OWNERSHIP_TOOLS,
+  RAW_STEERING_TOOL_ACCESS,
+  RAW_STEERING_TOOLS,
+  SHEPHERD_PHASES,
+  STATE_TOOL_ACCESS,
+  STEERING_TOOL_ACCESS,
+  STEERING_TOOLS,
+} from "../src/agents.js";
+import { createStateTools, createSteeringTools, modeForAgent } from "../src/index.js";
 import {
   GRAZER_PROMPT,
   SHEEPDOG_PROMPT,
@@ -421,4 +435,458 @@ test("separates leaf work from coordinator acknowledgement and milestone replies
   assert.match(SHEEP_PROMPT, /CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE/);
   assert.match(GRAZER_PROMPT, /FINALIZE followed by the findings/);
   assert.match(SHEARER_REVIEW_PROMPT, /FINALIZE followed by exactly one verdict/);
+});
+
+test("denies Developer steering submission to all seven orchestration roles as defense in depth", () => {
+  const agents = createAgents();
+  assert.deepEqual([...ORCHESTRATION_ROLES].sort(), [
+    "grazer",
+    "shearer-low",
+    "shearer-medium",
+    "sheep",
+    "sheepdog",
+    "shepherd",
+    "shepherd-governor",
+  ]);
+  assert.equal(DEVELOPER_AGENT, "developer");
+  assert.ok(!ORCHESTRATION_ROLES.includes(DEVELOPER_AGENT));
+  for (const role of ORCHESTRATION_ROLES) {
+    assert.equal(agents[role].permission[STEERING_TOOLS.submit], "deny", `${role} must deny ${STEERING_TOOLS.submit}`);
+  }
+});
+
+test("keeps steering submission parity between static permissions and runtime allowlist", async () => {
+  const tools = createSteeringTools({ cwd: tmpdir() });
+  assert.ok(tools[STEERING_TOOLS.submit], `plugin registers ${STEERING_TOOLS.submit}`);
+  assert.deepEqual([...STEERING_TOOL_ACCESS.keys()], [STEERING_TOOLS.submit]);
+  assert.deepEqual([...STEERING_TOOL_ACCESS.get(STEERING_TOOLS.submit)], [DEVELOPER_AGENT]);
+  const agents = createAgents();
+  for (const [name, allowed] of STEERING_TOOL_ACCESS) {
+    assert.ok(tools[name], `plugin registers ${name}`);
+    for (const agent of allowed) {
+      assert.ok(!agents[agent], `Developer is not a registered orchestration agent: ${agent}`);
+    }
+    for (const role of ORCHESTRATION_ROLES) {
+      assert.equal(agents[role].permission[name], "deny", `${role} is denied ${name} statically`);
+      assert.ok(!allowed.has(role), `${role} is absent from the runtime allowlist`);
+    }
+  }
+});
+
+test("maps Developer to an explicit non-flock mode distinct from none", () => {
+  assert.equal(modeForAgent(DEVELOPER_AGENT), "developer");
+  assert.equal(modeForAgent("none"), "none");
+  assert.equal(modeForAgent("unknown"), "none");
+  assert.equal(modeForAgent("ambiguous"), "none");
+  assert.equal(modeForAgent(undefined), "none");
+  assert.notEqual(modeForAgent(DEVELOPER_AGENT), "none");
+});
+
+test("never spawns Developer through any flock spawn matrix", () => {
+  const agents = createAgents();
+  const pattern = `herdr agent start * --kind opencode --pane * -- --agent ${DEVELOPER_AGENT}`;
+  for (const role of ORCHESTRATION_ROLES) {
+    assert.equal(agents[role].permission.bash?.[pattern], undefined, `${role} must not spawn ${DEVELOPER_AGENT}`);
+  }
+});
+
+test("M3 shepherd-only raw steering and ownership tools with explicit worker denials in code", () => {
+  const agents = createAgents();
+  assert.deepEqual([...SHEPHERD_PHASES].sort(), ["shepherd", "shepherd-governor"]);
+  for (const name of Object.values(RAW_STEERING_TOOLS)) {
+    assert.equal(agents.shepherd.permission[name], "allow", `shepherd must allow ${name}`);
+    assert.equal(agents["shepherd-governor"].permission[name], "allow", `governor must allow ${name}`);
+    for (const role of ["sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+      assert.equal(agents[role].permission[name], "deny", `${role} must deny ${name} in code`);
+    }
+  }
+  for (const name of Object.values(OWNERSHIP_TOOLS)) {
+    assert.equal(agents.shepherd.permission[name], "allow", `shepherd must allow ${name}`);
+    assert.equal(agents["shepherd-governor"].permission[name], "allow", `governor must allow ${name}`);
+    for (const role of ["sheepdog", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+      assert.equal(agents[role].permission[name], "deny", `${role} must deny ${name} in code`);
+    }
+  }
+  // Sheepdog is explicitly denied every raw steering tool (not only via prompts).
+  for (const name of Object.values(RAW_STEERING_TOOLS)) {
+    assert.ok(name in agents.sheepdog.permission, `sheepdog permission must list ${name}`);
+  }
+});
+
+test("M3 keeps raw and ownership parity between static permissions and runtime allowlists", async () => {
+  const { createOwnershipTools, createRawSteeringTools } = await import("../src/index.js");
+  const { tmpdir } = await import("node:os");
+  const rawTools = createRawSteeringTools({ cwd: tmpdir() });
+  const ownershipTools = createOwnershipTools({ cwd: tmpdir() });
+  for (const [name, allowed] of RAW_STEERING_TOOL_ACCESS) {
+    assert.ok(rawTools[name], `plugin registers ${name}`);
+    assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+    for (const role of ORCHESTRATION_ROLES) {
+      const expected = allowed.has(role) ? "allow" : "deny";
+      assert.equal(createAgents()[role].permission[name], expected, `${role} static ${name} must be ${expected}`);
+    }
+  }
+  for (const [name, allowed] of OWNERSHIP_TOOL_ACCESS) {
+    assert.ok(ownershipTools[name], `plugin registers ${name}`);
+    assert.deepEqual([...allowed].sort(), ["shepherd", "shepherd-governor"]);
+    for (const role of ORCHESTRATION_ROLES) {
+      const expected = allowed.has(role) ? "allow" : "deny";
+      assert.equal(createAgents()[role].permission[name], expected, `${role} static ${name} must be ${expected}`);
+    }
+  }
+  // Developer remains absent from shepherd tool allowlists.
+  for (const allowed of [...RAW_STEERING_TOOL_ACCESS.values(), ...OWNERSHIP_TOOL_ACCESS.values()]) {
+    assert.ok(!allowed.has(DEVELOPER_AGENT));
+  }
+});
+
+test("M3 prompts own raw steering for shepherd phases and deny it for workers", async () => {
+  const { SHEPHERD_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEEPDOG_PROMPT, GRAZER_PROMPT, SHEEP_PROMPT } = await import("../src/prompts.js");
+  assert.match(SHEPHERD_PROMPT, /Only the recorded owner phase/);
+  assert.match(SHEPHERD_PROMPT, /NOT AUTHORITATIVE PHASE/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /NOT AUTHORITATIVE PHASE/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never raw records/);
+  assert.match(SHEEPDOG_PROMPT, /never yours to read directly|denied those tools/);
+  assert.match(GRAZER_PROMPT, /not yours/);
+  assert.match(SHEEP_PROMPT, /not yours/);
+});
+
+// --- 21-M1 sheepdog lifecycle (reprompt) ------------------------------------
+
+function m1GlobToRegExp(pattern) {
+  let out = "^";
+  for (const c of pattern) {
+    if (c === "*") out += ".*";
+    else if ("+?^${}()|[]\\.".includes(c)) out += `\\${c}`;
+    else out += c;
+  }
+  return new RegExp(`${out}$`);
+}
+
+function m1EvaluateBash(bash, command) {
+  let result;
+  for (const [pattern, decision] of Object.entries(bash)) {
+    if (m1GlobToRegExp(pattern).test(command)) result = decision;
+  }
+  return result ?? "undefined";
+}
+
+test("21-M1 sheepdog start plus prompt plus re-prompt plus wait plus get plus read for each owned role", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  for (const key of ["herdr agent prompt*", "herdr agent wait*", "herdr agent get*", "herdr agent read*"]) {
+    assert.equal(bash[key], "allow", `${key} must stay evaluation-effective for sheepdog`);
+  }
+  const keys = Object.keys(bash);
+  const star = keys.indexOf("*");
+  const promptIdx = keys.indexOf("herdr agent prompt*");
+  const waitIdx = keys.indexOf("herdr agent wait*");
+  const getIdx = keys.indexOf("herdr agent get*");
+  const readIdx = keys.indexOf("herdr agent read*");
+  const sepIdx = keys.indexOf("*;*");
+  assert.ok(star !== -1 && promptIdx > star, "* deny stays fallback first with lifecycle allows after it");
+  for (const idx of [waitIdx, getIdx, readIdx]) assert.ok(idx > star, "wait/get/read allow after * deny");
+  assert.ok(sepIdx > promptIdx && sepIdx > waitIdx && sepIdx > getIdx && sepIdx > readIdx, "separator denies stay global last");
+  assert.equal(bash["*"], "deny");
+
+  for (const role of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal(bash[spawnPattern(role)], "allow", `sheepdog must start ${role}`);
+    const start = `herdr agent start ${role}_1 --kind opencode --pane pane1 -- --agent ${role}`;
+    assert.equal(m1EvaluateBash(bash, start), "allow", `start evaluates allow for ${role}`);
+    const prompt = `herdr agent prompt ${role}_1 hello --wait --timeout 1000`;
+    assert.equal(m1EvaluateBash(bash, prompt), "allow", `prompt evaluates allow for ${role}`);
+    const reprompt = `herdr agent prompt ${role}_1 corrected bounded text --wait --timeout 1000`;
+    assert.equal(m1EvaluateBash(bash, reprompt), "allow", `re-prompt same worker evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent wait ${role}_1 --timeout 1000`), "allow", `wait evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent get ${role}_1`), "allow", `get evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent read ${role}_1`), "allow", `read evaluates allow for ${role}`);
+  }
+  assert.equal(createAgents().sheepdog.permission.herdr_agent_response, "allow", "sheepdog retrieves via herdr_agent_response");
+});
+
+test("21-M1 sheepdog separator content safety fails closed with safe prompt rule", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  const clean = 'herdr agent prompt sheep_1 bounded task without separators --wait --timeout 1000';
+  assert.equal(m1EvaluateBash(bash, clean), "allow", "clean prompt stays allow");
+  for (const cmd of [
+    'herdr agent prompt sheep_1 "fix; do X" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a && b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a || b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a | b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a > b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a < b" --wait --timeout 1000',
+  ]) {
+    assert.equal(m1EvaluateBash(bash, cmd), "deny", `separator task text must fail closed: ${cmd}`);
+  }
+  assert.match(SHEEPDOG_PROMPT, /content-safe/);
+  assert.match(SHEEPDOG_PROMPT, /never carry raw separator/);
+  assert.match(SHEEPDOG_PROMPT, /fails closed/);
+  assert.match(SHEEPDOG_PROMPT, /split or rephrase/);
+  assert.match(SHEEPDOG_PROMPT, /re-prompt the same worker/);
+  assert.match(SHEEPDOG_PROMPT, /herdr agent wait/);
+  assert.match(SHEEPDOG_PROMPT, /herdr agent get plus herdr agent read/);
+});
+
+test("21-M1 sheepdog Ctrl-C-only send-keys replacement with honest residual", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  assert.equal(bash["herdr agent send-keys*"], "deny", "broad send-keys must be denied for sheepdog");
+  for (const key of [
+    "herdr agent send-keys * --keys C-c*",
+    "herdr agent send-keys * --keys ctrl+c*",
+    "herdr agent send-keys * C-c*",
+  ]) {
+    assert.equal(bash[key], "allow", `${key} must allow Ctrl-C interrupt`);
+  }
+  const keys = Object.keys(bash);
+  assert.ok(keys.indexOf("herdr agent send-keys*") > keys.indexOf("*"), "send-keys deny after * fallback");
+  assert.ok(keys.indexOf("herdr agent send-keys * --keys C-c*") > keys.indexOf("herdr agent send-keys*"), "narrow Ctrl-C after broad deny");
+  assert.ok(keys.indexOf("*;*") > keys.indexOf("herdr agent send-keys * --keys C-c*"), "separator denies stay global last after Ctrl-C allows");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys C-c"), "allow");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys ctrl+c"), "allow");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 ls"), "deny", "arbitrary typing stays denied");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys C-c; rm"), "deny", "separator smuggling stays denied");
+  assert.match(SHEEPDOG_PROMPT, /Use send-keys only to interrupt a genuinely stuck worker with Ctrl\+C after inspection/);
+  assert.match(SHEEPDOG_PROMPT, /Never type implementation commands/);
+  assert.match(SHEEPDOG_PROMPT, /never-bypass/);
+  assert.match(SHEEPDOG_PROMPT, /cannot prove intent/);
+  assert.match(SHEEPDOG_PROMPT, /stays primary/);
+});
+
+test("21-M1 sheepdog REWORK same-sheep routing plus re-review independence plus direct denial", () => {
+  assert.match(SHEEPDOG_PROMPT, /REWORK returns concrete findings to the responsible sheep for correction and re-review/);
+  assert.match(SHEEPDOG_PROMPT, /Give each shearer fresh bounded context/);
+  assert.match(SHEEPDOG_PROMPT, /not the worker conversation/);
+  assert.match(SHEEPDOG_PROMPT, /After two failed semantic review cycles/);
+  assert.match(SHEEPDOG_PROMPT, /escalate to shepherd-governor/);
+  const agent = createAgents().sheepdog;
+  assert.equal(agent.permission.edit, "deny", "sheepdog never implements directly");
+  assert.equal(agent.permission.apply_patch, "deny");
+  assert.match(SHEEPDOG_PROMPT, /You must not edit files, apply patches, hand-resolve conflicts/);
+  assert.match(SHEEPDOG_PROMPT, /Never hand-edit a conflicted file/);
+  assert.match(SHEEPDOG_PROMPT, /never leave a merge or cherry-pick in progress/);
+  const bash = agent.permission.bash;
+  for (const denied of ["git push*", "git pull*", "git fetch*", "git remote*", "git rebase*", "git reset*", "git checkout*", "git switch*", "git worktree*", "herdr worktree remove * --force*"]) {
+    assert.equal(bash[denied], "deny", `${denied} retained as deny for sheepdog`);
+  }
+  assert.equal(m1EvaluateBash(bash, "git push origin HEAD"), "deny", "push stays denied");
+  for (const role of ["sheepdog", "shepherd", "shepherd-governor"]) {
+    assert.equal(bash[spawnPattern(role)], undefined, `sheepdog must not spawn ${role}`);
+  }
+  assert.equal(m1EvaluateBash(bash, "herdr agent start dog2 --kind opencode --pane p1 -- --agent sheepdog"), "deny", "sheepdog spawns sheepdog fails closed");
+});
+
+test("21-M1 sheepdog scoped override guard stays scoped and shadows fail closed", () => {
+  const agents = createAgents({
+    sheepdogPermissions: { private_squad_status: "allow" },
+    sheepdogPromptAppend: "Use private squad tools according to local policy.",
+  });
+  assert.equal(agents.sheepdog.permission.private_squad_status, "allow");
+  assert.match(agents.sheepdog.prompt, /Use private squad tools according to local policy\.$/);
+  for (const name of ["shepherd", "shepherd-governor", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal("private_squad_status" in agents[name].permission, false, `sheepdog tuple must not leak to ${name}`);
+    assert.doesNotMatch(agents[name].prompt, /private squad tools/);
+  }
+  const shepherdScoped = createAgents({
+    shepherdPermissions: { private_deployment_status: "allow" },
+    shepherdPromptAppend: "Shepherd private note.",
+  });
+  assert.equal("private_deployment_status" in shepherdScoped.sheepdog.permission, false, "shepherd tuple must not leak to sheepdog");
+  assert.doesNotMatch(shepherdScoped.sheepdog.prompt, /Shepherd private note/);
+  assert.equal(shepherdScoped.sheepdog.permission.bash["herdr agent prompt*"], "allow", "shepherd tuple preserves sheepdog lifecycle");
+
+  const shadowed = mergeAgent(createAgents().sheepdog, { permission: { bash: { "herdr agent prompt*": "deny" } } });
+  assert.equal(shadowed.permission.bash["herdr agent prompt*"], "deny", "local shadowing flips the static entry");
+  assert.equal(m1EvaluateBash(shadowed.permission.bash, "herdr agent prompt sheep_1 hello --wait --timeout 1000"), "deny", "shadowed lifecycle fails closed to deny");
+  assert.throws(() => createAgents({ sheepdogPromptAppend: 42 }), /sheepdogPromptAppend must be a string/);
+  assert.throws(() => createAgents({ shepherdPromptAppend: 42 }), /shepherdPromptAppend must be a string/);
+});
+
+// --- 20-M1 responsive wait mechanics -----------------------------------------
+
+test("20-M1 Shepherd plus Sheepdog prompts describe the bounded poll loop", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const prompt = agents[name].prompt;
+    assert.match(prompt, /bounded poll loop/, `${name} names the bounded loop`);
+    assert.match(prompt, /short interval/, `${name} polls on a short interval`);
+    assert.match(prompt, /herdr agent get/, `${name} polls via get`);
+    assert.match(prompt, /working means continue/, `${name} working means continue`);
+    assert.match(prompt, /idle or done means retrieve/, `${name} settled means retrieve`);
+    assert.match(prompt, /herdr_agent_response until complete/, `${name} retrieves until complete`);
+    assert.match(prompt, /blocked means inspect/, `${name} blocked means inspect`);
+    assert.match(prompt, /never blind input/, `${name} never blind input`);
+    assert.match(prompt, /surface immediately with .*distinct structured code/, `${name} early failures stay distinct`);
+    assert.match(prompt, /instead of decaying to timeout/, `${name} never decays to timeout`);
+    assert.match(prompt, /disappearance.*explicit/, `${name} disappearance gets explicit report`);
+    assert.match(prompt, /safety timeout stays the final bound only/, `${name} safety timeout is final bound`);
+    assert.match(prompt, /WAIT_TIMEOUT_EXPIRED/, `${name} names the timeout code`);
+    assert.match(prompt, /Retries stay bounded/, `${name} retries stay bounded`);
+    assert.match(prompt, /Treat unknown as inconclusive/, `${name} keeps unknown inconclusive`);
+  }
+  assert.match(agents.sheepdog.prompt, /herdr agent wait/, "sheepdog keeps wait as bounded sleep");
+  assert.match(agents.sheepdog.prompt, /herdr agent get plus herdr agent read/, "sheepdog keeps get plus read checks");
+  assert.match(agents.sheepdog.prompt, /content-safe/, "sheepdog keeps content-safe rule");
+  assert.match(agents.shepherd.prompt, /routine flock waits belong to sheepdog/, "shepherd defers routine waits to sheepdog");
+  assert.match(agents["shepherd-governor"].prompt, /routine flock waits belong to sheepdog/, "governor defers routine waits to sheepdog");
+  assert.match(agents.sheepdog.prompt, /no per-transition Shepherd wakeups/, "sheepdog owns waits without per-transition wakeups");
+});
+
+test("20-M1 lifecycle allows stay to already-permitted surfaces with no new commands", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const bash = agents[name].permission.bash;
+    for (const key of ["herdr agent prompt*", "herdr agent wait*", "herdr agent get*", "herdr agent read*", "herdr agent list*"]) {
+      assert.equal(bash[key], "allow", `${name} keeps ${key} for bounded polling`);
+    }
+    for (const invented of [
+      "herdr events*",
+      "herdr agent events*",
+      "herdr agent logs*",
+      "herdr agent stream*",
+      "herdr agent tail*",
+      "herdr event*",
+    ]) {
+      assert.equal(bash[invented], undefined, `${name} must not invent ${invented}`);
+      assert.equal(m1EvaluateBash(bash, invented.replace("*", " squad_1")), "deny", `${invented} stays denied for ${name}`);
+    }
+  }
+  const governorBash = agents["shepherd-governor"].permission.bash;
+  assert.equal(governorBash[spawnPattern("sheep")], undefined, "governor leaf spawn ban untouched");
+  assert.equal(governorBash[spawnPattern("shearer-low")], undefined, "governor shearer ban untouched");
+  assert.match(agents["shepherd-governor"].prompt, /Never prompt.*sheep/, "governor leaf prompt ban untouched");
+  for (const role of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal(agents.sheepdog.permission.bash[spawnPattern(role)], "allow", `sheepdog keeps owned ${role} waits`);
+  }
+});
+
+test("20-M1 Sheepdog owns routine flock handling with unknown inconclusive preserved", () => {
+  const agents = createAgents();
+  assert.match(agents.sheepdog.prompt, /You own routine flock waits/, "sheepdog owns routine waits");
+  assert.match(agents.sheepdog.prompt, /You own leaf retries/, "sheepdog keeps leaf retries");
+  assert.match(agents.shepherd.prompt, /no per-transition Shepherd wakeups/, "shepherd has no per-transition wakeups");
+  assert.match(agents["shepherd-governor"].prompt, /never wait on sheep or shearer/, "governor never waits on leaves directly");
+  for (const prompt of [agents.shepherd.prompt, agents["shepherd-governor"].prompt, agents.sheepdog.prompt]) {
+    assert.match(prompt, /unknown as inconclusive/, "unknown stays inconclusive in every wait loop");
+    assert.doesNotMatch(prompt, /herdr agent events/, "no stream invented in prompts");
+    assert.doesNotMatch(prompt, /herdr agent logs/, "no log stream invented in prompts");
+  }
+});
+
+// --- 14-18-M1 pane layout (single policy plus permission enablement) --------
+
+test("14-18-M1 pane layout matrices per ownership role with leaves unchanged", () => {
+  const agents = createAgents();
+  const shepherdBash = agents.shepherd.permission.bash;
+  const governorBash = agents["shepherd-governor"].permission.bash;
+  const sheepdogBash = agents.sheepdog.permission.bash;
+
+  for (const [name, bash] of [["shepherd", shepherdBash], ["shepherd-governor", governorBash]]) {
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+      assert.equal(bash[key], "allow", `${name} must allow ${key} for single Sheepdog pane`);
+    }
+    assert.equal(bash["herdr pane close*"], undefined, `${name} must not close (single pane, no flock cleanup)`);
+  }
+
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(sheepdogBash[key], "allow", `sheepdog must allow ${key} for flock panes`);
+  }
+
+  for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const bash = agents[name].permission.bash;
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+      assert.equal(bash[key], undefined, `${name} must gain no pane layout allow for ${key}`);
+    }
+  }
+  assert.equal(agents.sheep.permission.bash["herdr*"], "deny", "sheep keeps broad Herdr denial");
+  assert.equal(agents.sheep.permission.bash["*"], "allow", "sheep keeps allow fallback with denials");
+  for (const name of ["grazer", "shearer-low", "shearer-medium"]) {
+    assert.equal(agents[name].permission.bash["*"], "deny", `${name} keeps deny fallback`);
+  }
+});
+
+test("14-18-M1 pane layout evaluation stays effective with separators global last", () => {
+  const shepherdBash = createAgents().shepherd.permission.bash;
+  const governorBash = createAgents()["shepherd-governor"].permission.bash;
+  const sheepdogBash = createAgents().sheepdog.permission.bash;
+  for (const [name, bash] of [["shepherd", shepherdBash], ["shepherd-governor", governorBash], ["sheepdog", sheepdogBash]]) {
+    const keys = Object.keys(bash);
+    const star = keys.indexOf("*");
+    const tabList = keys.indexOf("herdr tab list*");
+    const paneGet = keys.indexOf("herdr pane get*");
+    const paneRename = keys.indexOf("herdr pane rename*");
+    const agentRename = keys.indexOf("herdr agent rename*");
+    const sep = keys.indexOf("*;*");
+    assert.ok(star !== -1 && tabList > star, `${name} tab list allow after * deny`);
+    for (const idx of [paneGet, paneRename, agentRename]) assert.ok(idx > star, `${name} pane rename/get allow after * deny`);
+    assert.ok(sep > tabList && sep > paneGet && sep > paneRename && sep > agentRename, `${name} separator denies stay global last`);
+    assert.equal(m1EvaluateBash(bash, "herdr tab list --workspace w1K"), "allow", `${name} tab list evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr pane get w1K:p1"), "allow", `${name} pane get evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr pane rename w1K:p1 Sheepdog"), "allow", `${name} pane rename evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr agent rename issue1418m1sheep sheep-1"), "allow", `${name} agent rename evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr tab list --workspace w1K; rm"), "deny", `${name} separator smuggling stays denied`);
+  }
+  assert.equal(m1EvaluateBash(sheepdogBash, "herdr pane close w1K:p1"), "allow", "sheepdog pane close evaluates allow for owned flock pane");
+  assert.equal(m1EvaluateBash(shepherdBash, "herdr pane close w1K:p1"), "deny", "shepherd pane close fails closed to deny");
+  assert.equal(m1EvaluateBash(governorBash, "herdr pane close w1K:p1"), "deny", "governor pane close fails closed to deny");
+});
+
+test("14-18-M1 pane layout invents no tab create plus close plus move plus resize behavior", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const bash = agents[name].permission.bash;
+    for (const invented of [
+      "herdr tab create*",
+      "herdr tab close*",
+      "herdr tab get*",
+      "herdr tab focus*",
+      "herdr tab rename*",
+      "herdr pane move*",
+      "herdr pane focus*",
+      "herdr pane resize*",
+      "herdr pane swap*",
+      "herdr pane neighbor*",
+      "herdr pane edges*",
+      "herdr pane create*",
+      "herdr tab split*",
+      "herdr workspace create*",
+      "herdr agent events*",
+    ]) {
+      assert.equal(bash[invented], undefined, `${name} must not invent ${invented}`);
+      assert.equal(m1EvaluateBash(bash, invented.replace("*", " w1K")), "deny", `${invented} stays denied for ${name}`);
+    }
+    assert.equal(bash["herdr pane split*"], "allow", `${name} keeps evidenced split for placement`);
+    assert.equal(bash["herdr pane list*"], "allow", `${name} keeps evidenced list for scan`);
+    assert.equal(bash["herdr pane layout*"], "allow", `${name} keeps evidenced layout for geometry`);
+    assert.equal(bash["herdr pane current*"], "allow", `${name} keeps evidenced current for caller context`);
+  }
+});
+
+test("14-18-M1 protected Dev Developer Terminal exclusion presence with honest matcher residual", () => {
+  const agents = createAgents();
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /## Pane layout policy/, "single normative pane policy section exists");
+  assert.match(readme, /at most four panes per tab/, "4-pane cap present");
+  assert.match(readme, /Role grouping/, "role grouping present");
+  assert.match(readme, /Indexed overflow/, "indexed overflow present");
+  assert.match(readme, /Reuse before create/, "reuse before create present");
+  assert.match(readme, /Startup destinations/, "startup destinations present");
+  assert.match(readme, /Ownership/, "ownership present");
+  assert.match(readme, /Protected Dev Developer Terminal exclusion/, "protected exclusion present");
+  assert.match(readme, /excluded from every scan plus split plus placement plus rename plus close plus reuse/, "exclusion covers every scan split placement rename close reuse");
+  assert.match(readme, /Six-step placement/, "6-step placement present");
+  assert.match(readme, /Pane layout residual/, "honest matcher residual present");
+  assert.match(readme, /no `\*Dev\*` glob is added/, "residual documents why no Dev glob");
+  assert.match(readme, /Never invent/, "fallback present with never-invent rule");
+  assert.match(readme, /STOP.*naming the missing capability/, "fallback reports STOP on missing primitive");
+
+  const source = fs.readFileSync(new URL("../src/agents.js", import.meta.url), "utf8");
+  assert.match(source, /SHEPHERD_PANE_ALLOWS/, "shepherd Sheepdog pane matrix present");
+  assert.match(source, /GOVERNOR_PANE_ALLOWS/, "governor Sheepdog pane matrix present");
+  assert.match(source, /SHEEPDOG_PANE_ALLOWS/, "sheepdog flock panes matrix present");
+  assert.match(source, /Protected Dev Developer Terminal exclusion cannot be matcher-enforced/, "matcher residual documented in code");
+  assert.doesNotMatch(source, /"\*Dev\*"/, "no overmatching Dev glob is added");
+  assert.doesNotMatch(source, /"\*Developer Terminal\*"/, "no overmatching Developer Terminal glob is added");
+
+  const sheepdogBash = agents.sheepdog.permission.bash;
+  assert.equal(sheepdogBash["herdr pane close*"], "allow", "sheepdog close is broad by necessity");
+  assert.equal(m1EvaluateBash(sheepdogBash, "herdr pane close w1K:p1"), "allow", "close glob would still match a Dev pane ID, proving the residual: policy plus prompt stay primary");
 });
