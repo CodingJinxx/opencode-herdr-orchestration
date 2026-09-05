@@ -439,21 +439,129 @@ Herdr currently exposes `send-keys`, not a narrower agent interrupt command. She
 
 This restriction is not hard-enforced by Herdr. A native `herdr agent interrupt <target>` command would close that capability gap.
 
-## Developer steering (M2 primitives only)
+## Developer steering
 
 Developer steering is a trusted-Developer queue scoped per Plan ID target under `<git-common-dir>/flocky/steering/<planId>/`. There is exactly one submission tool, `herdr_steering_submit`, registered through the existing plugin mechanism. The submission allowlist holds only the explicit non-flock `developer` context; `shepherd`, `shepherd-governor`, `sheepdog`, `grazer`, `sheep`, `shearer-low`, `shearer-medium`, `unknown`, `ambiguous`, `none`, and unset contexts are denied fail-closed with no filesystem write. Developer is never inferred from session mode, directory, environment text, or prompt content. Static per-agent permissions deny the tool for all seven orchestration roles as defense in depth; the runtime `context.agent` check stays authoritative over static overrides.
 
-Submissions carry bounded content (at most 8192 UTF-8 bytes) plus an optional explicit `planId` only. Target resolution uses the explicit `planId` or infers only when exactly one active steering target exists, else fails closed with `AMBIGUOUS_TARGET` and no repository-wide steering. Each publication is immutable per target with a service-assigned sequence, opaque steering id, timestamp, trusted provenance, target identity, bounded content, and schema version. Queue reads are `check` (unread counts without loading bodies), `read` (ordered exact unread with no mutation), and idempotent `consume` (advances only after durable checkpoint disposition; the checkpoint holds the highest contiguous consumed sequence plus consumed ids). Per-Plan-ID ordering isolates unrelated plans. Mutations use a scoped per-target lock via exclusive create plus a journal via atomic rename with stale takeover and replay, so interruption is recoverable.
+### Steering UX through the existing integration
 
-Provenance honesty: the recorded `developer` submitter is integration-asserted by the OpenCode plugin runtime (`context.agent === "developer"`), never an authenticated human. Any session that can present as `developer` — including a custom-configured `developer` agent — can submit. Flock roles cannot present as Developer: `developer` is not a registered orchestration agent, no spawn matrix creates it, and flock permissions deny the tool. Keep remote authorization and human review as the authoritative controls. There is no `herdr steer` command and no package CLI steering command.
+There is no `herdr steer` command and no package CLI steering command. The Developer submits only through the `herdr_steering_submit` plugin tool in a Developer context:
 
-## Shepherd ownership and lifecycle synchronization (M3)
+```json
+{
+  "planId": "topic-20260901-01",
+  "content": "Hold scope; keep the migration local."
+}
+```
+
+`content` is required and bounded to at most 8192 UTF-8 bytes; `planId`, when given, must be 1-64 characters of letters, digits, dot, underscore, or hyphen and must not start with a dot. The request accepts only `content` plus an optional explicit `planId`; any other field fails with `INVALID_REQUEST` and writes nothing. The Shepherd phases consume through the existing ownership-gated tools only: `herdr_steering_check` shows unread counts without loading bodies, `herdr_steering_read` returns ordered exact unread with no mutation, and `herdr_steering_consume` advances only after the authoritative owner recorded a sync disposition for the claimed sync point. `check` and `read` never mutate; `read` before `consume` leaves entries unread across process restarts and service instances. `consume` is idempotent: repeating the same ids with the same recorded disposition returns the same checkpoint without advancing differently. Steering entries are immutable per target with a service-assigned sequence starting at 1, an opaque id shaped like `st_<16 hex>`, an ISO timestamp, trusted provenance, target identity, bounded content, and schema version 1, stored as `<git-common-dir>/flocky/steering/<planId>/entries/<10-digit-sequence>-<id>.json`. Per-Plan-ID ordering isolates unrelated plans: sequence 1 in one plan is independent of sequence 1 in another. Sheepdog and every leaf never see raw steering; they are denied `herdr_steering_check`, `herdr_steering_read`, and `herdr_steering_consume` in `src/agents.js` and in the runtime allowlist in `src/index.js`, not only in prompts, and receive only normal corrective instructions from the Shepherd.
+
+### Target ambiguity behavior
+
+Target resolution uses the explicit `planId` or infers only when exactly one active steering target exists, else it fails closed with `AMBIGUOUS_TARGET` and creates no repository-wide steering. Zero targets with no explicit `planId` reports that no target was given and no active target exists; two or more targets with no explicit `planId` reports how many exist and requires an explicit `planId`. Both cases set `retryable: false` and perform no filesystem write. Inference scans only immediate child directories of `<git-common-dir>/flocky/steering/` whose names satisfy the Plan ID pattern and are directories; files, hidden names, traversal names, and non-directories are ignored. When a lifecycle record exists for the target, inference alone is insufficient: the caller must also prove authoritative phase plus session plus generation, otherwise the call fails with `NOT AUTHORITATIVE PHASE` and loads no bodies. Gated `check`, `read`, and `consume` calls require an explicit `planId` together with `phase`, `session`, and `generation`; a partial proof fails with `INVALID_REQUEST`. Operator rule: always pass an explicit `planId` from the plan header; omit it only for a single-plan repository as a convenience.
+
+Queue mechanics: `check` reports `total`, `unread`, `nextSequence`, and `highestContiguous` without loading bodies; `read` returns ordered exact unread entries plus the checkpoint with no mutation; `consume` takes explicit `ids` (1-1000 per call) and advances only after durable checkpoint disposition. The checkpoint holds the highest contiguous consumed sequence plus the sorted consumed ids, so non-contiguous consumes leave the contiguous pointer at the gap until the gap is filled. Mutations use a scoped per-target lock via exclusive create (`queue.lock`, 30 second stale takeover, 200 retries every 10 ms) plus a journal via atomic rename (`queue.journal`) with stale takeover and replay, so interruption is recoverable as described in Recovery.
+
+### Provenance honesty and limits (integration-asserted, not authenticated)
+
+The recorded `developer` submitter is integration-asserted by the OpenCode plugin runtime (`context.agent === "developer"`), never an authenticated human. The entry stores:
+
+```json
+{
+  "submitter": "developer",
+  "integration": "integration-asserted Developer context; not an authenticated human"
+}
+```
+
+Any session that can present as `developer` — including a custom-configured `developer` agent — can submit. Flock roles cannot present as Developer: `developer` is not a registered orchestration agent, no spawn matrix entry creates it, static per-agent permissions deny `herdr_steering_submit` for all seven orchestration roles, and the runtime allowlist holds only `developer`. The runtime check stays authoritative over static overrides: even a local config that flips a flock role to `allow` still fails with `UNAUTHORIZED_AGENT` and writes nothing. Developer is mapped to an explicit non-flock `SHEPHERD_MODE` value `developer`, distinct from `shepherd`, `governor`, `sheepdog`, `grazer`, `sheep`, `shearer`, and `none`. Keep remote authorization and human review as the authoritative controls for anything consequential. There is no `herdr steer` command and no package CLI steering command; `bin/orchestration.js` and `package.json` expose only `opencode-herdr-orchestration` with `install`, `update`, `configure-agents`, `status`, `uninstall`, `install-hooks`, and `uninstall-hooks`.
+
+## Shepherd ownership and lifecycle synchronization
 
 Validated target lifecycle records live per active Plan ID under `<git-common-dir>/flocky/ownership/<planId>/record.json` with bounded fields for plan ID plus phase (`planning`, `governance`) plus authoritative session plus generation plus milestone plus lifecycle state plus current objective plus current action plus active sheepdog target plus relevant revision plus pending consequential action plus timestamp, using closed vocabularies for phase, lifecycle state, sync point, disposition, and snapshot stage. Text fields store only bounded semantic summaries; reasoning transcripts and scrollback are rejected with `SENSITIVE_CONTENT_EXCLUDED`.
 
 Planning-to-governance handoff uses session plus generation fencing under a per-target lock: the first claim must use generation 1 and every handoff must increase generation, so both phases cannot race on the same generation. Once a record exists, only the recorded owner phase plus session plus generation may use the raw steering `check`, `read`, and `consume` operations and the owner lifecycle tools (`herdr_ownership_claim`, `herdr_ownership_read`, `herdr_ownership_sync`, `herdr_ownership_snapshot`, `herdr_ownership_correct`); any other caller receives `NOT AUTHORITATIVE PHASE` with no bodies loaded. Raw steering tools are shepherd-only in code: `sheepdog`, `grazer`, `sheep`, `shearer-low`, and `shearer-medium` are explicitly denied in `src/agents.js` and in the runtime allowlist in `src/index.js`, not only in prompts.
 
 Semantic synchronization covers both shepherd phases at eight mandatory checkpoints (`planning-start`, `pre-plan`, `pre-assignment`, `milestone-executing`, `result-received`, `continue`, `finalize`, `consequential-preparation`): the owner records disposition (`integrated`, `corrected`, `escalated`, `deferred`) before consume, and consume is idempotent. Snapshots cover `planning`, `executing`, `result-evaluation`, and `consequential-preparation`; pending consequential action must already be recorded before the consequential-preparation snapshot and its mandatory check. Corrections route from shepherd to sheepdog as normal corrective instructions, never raw records (`RAW_RECORD_REJECTED` on dumps); steering never authorizes `push`, `tag`, `publish`, `deploy`, `merge`, or any consequential action, and existing approvals still apply.
+
+### One Shepherd, two phases
+
+There is one Shepherd with two technical phases, each a registered agent. `shepherd` is the planning phase: it researches through read-only `grazer` workers and presents implementation-ready plans, and never implements. `shepherd-governor` is the governance phase: selecting it approves the latest presented plan, and it then contracts bounded work through `sheepdog` squads, judges semantics, and owns everything remote. Authority flows down only; milestones never imply acknowledgement and acknowledgement never auto-advances a milestone. The lifecycle record enforces this: `phase` is `planning` or `governance`, `session` is 1-128 characters of letters, digits, colon, underscore, or hyphen, and `generation` is a safe integer starting at 1. `herdr_ownership_claim` creates the record on generation 1 and hands off only on a strictly larger generation under a per-target lock (`queue.lock`, 30 second stale takeover); equal or smaller generations fail with `STALE_GENERATION` so both phases cannot race on the same generation. `herdr_ownership_read` requires the recorded phase plus session; a mismatch fails with `NOT AUTHORITATIVE PHASE`. Gated steering calls map a stale generation to `NOT AUTHORITATIVE PHASE` as well, so a handed-off owner immediately loses authority. Lifecycle state is one of `planning`, `executing`, `result-evaluation`, `consequential-preparation`, or `finalized`. Submitting during a milestone while `activeSheepdogTarget` is set is allowed; consumption waits until sheepdog yields (ownership clears the target on a newer generation) and the owner records the matching sync disposition first, otherwise `consume` fails with `SYNC_REQUIRED`.
+
+### Separate consequential authorization
+
+Steering never authorizes consequential actions. Every `consume`, `sync`, `snapshot`, and `correct` response carries:
+
+```json
+{
+  "push": false,
+  "tag": false,
+  "publish": false,
+  "deploy": false,
+  "merge": false,
+  "anyConsequential": false,
+  "approvalsStillRequired": true
+}
+```
+
+`consequentialPolicy` additionally reports `deniedActions: ["push", "tag", "publish", "deploy", "merge"]` with the note that existing approvals are still required. A steering entry that says "push and deploy now" is still just text: `consume` returns the denial alongside the checkpoint and the Shepherd must still obtain the normal plan acknowledgement, review verdicts, deterministic checks, and delivery approvals before acting. `herdr_ownership_sync` and `herdr_ownership_snapshot` for `consequential-preparation` require a non-empty `pendingConsequentialAction` already recorded in the lifecycle record, otherwise they fail with `PENDING_CONSEQUENTIAL_REQUIRED`; the pending text is only a bounded semantic summary of what will be prepared, never an authorization. `herdr_ownership_correct` routes only normal corrective instructions to `sheepdog` (`target: "sheepdog"`, `channel: "normal-corrective-instructions"`); JSON dumps carrying `sequence` plus `st_<16 hex>`, `consumedIds`, or `checkpoint`/`highestContiguous` shapes fail with `RAW_RECORD_REJECTED`.
+
+## Flocky layout
+
+All durable state lives under the repository's shared Git common directory (`git rev-parse --git-common-dir`, canonicalized through the native `realpath` binding so Windows 8.3 aliases and linked worktrees resolve to one identity). The service invokes only read-only `git rev-parse --git-common-dir` and `git rev-parse --show-toplevel`; it never writes arbitrary Git metadata.
+
+```text
+<git-common-dir>/flocky/
+  plans/<planId>.md
+  executions/<planId>.md
+  steering/<planId>/
+    entries/<10-digit-sequence>-<steering-id>.json
+    checkpoint.json
+    queue.lock
+    queue.journal
+  ownership/<planId>/
+    record.json
+    sync.json
+    snapshots/<stage>.json
+    queue.lock
+```
+
+Plan IDs are single path segments: 1-64 characters of letters, digits, dot, underscore, or hyphen, never starting with a dot. Markdown bodies are capped at 1 MiB; metadata values at 512 characters; steering content at 8192 UTF-8 bytes. Every worker worktree sheepdog creates — including worktrees created from other worktrees — is a peer sharing the same common directory, never a nested checkout, so a plan written in one worktree governs workers in all of them and survives session ends, process restarts, and machine reboots. Separate clones never share state: a copied artifact fails with `IDENTITY_MISMATCH` because the recorded `identity` differs from the current common directory. The recorded worktree top level is provenance only (`recordedToplevel` versus `currentToplevel` plus `toplevelMatches`); linked worktrees with different top levels read the same artifacts. The previous `<git-common-dir>/herdr` root is a compatibility source only: it is reconciled into `flocky` before every plan or execution operation, never auto-deleted, and never a second canonical authority. Retired coordination files `<git-common-dir>/flocky/.migration-lock` and `.migration-journal` are removed best-effort and never block reconciliation. Promotion staging temps (`<target>.<pid>.<hex>.migrating` plus atomic-write `<pid>.<hex>.tmp` files) and per-artifact repair guards (`<target>.repairing`) are service-owned and never user artifacts.
+
+## Upgrade
+
+Update through the cross-platform CLI; never hand-edit the global config while an OpenCode process that depends on it is running:
+
+```bash
+npx -y opencode-herdr-orchestration@latest update
+npx -y opencode-herdr-orchestration@latest configure-agents
+npx -y opencode-herdr-orchestration@latest status
+```
+
+The updater locates the global OpenCode config directory, installs the exact version, preserves JSONC comments and tuple options, creates timestamped backups of changed config and npm manifest files, validates every agent role through a short-lived OpenCode debug process, and never restarts a running OpenCode process. On validation failure it restores the previous config and reports the error. After installation quit and restart OpenCode intentionally; agent and plugin configuration loads only at startup. Before updating to the current package, archive or remove stale standalone agent files after dependent processes have ended (`shepherd-plan.md`, `shepherd-build.md`, `sheep-plan.md`, `sheep-build.md`, `shearer-review-low.md`, `shearer-review-medium.md`, plus misspelled `sheperd-plan.md` and `sheperd-build.md`); a leftover file with a colliding name silently overrides package fields. The installer reports package-owned deletions versus unowned or modified files that require manual review, and `status` reports installed versus latest versions, configured agents, and obsolete files. The shared Git push policy stays opt-in via `install --with-hooks` or `install-hooks`, which refuses to replace an existing global `core.hooksPath` without `--force`. Add repository-specific protected branches with `git config --add orchestration.protectedBranch <name>`; `main` and `master` are always protected in governance mode.
+
+## Recovery
+
+All mutations are atomic and replayable; interruption leaves at most inert temps or a journal that the next call replays idempotently. Operator rule: retry `STEERING_BUSY` and `OWNERSHIP_BUSY` (both `retryable: true`); never hand-delete a live lock, journal, checkpoint, or guard.
+
+- Steering submit: the journal (`queue.journal` via atomic rename) is written before the immutable entry install (exclusive create `wx`), then cleared. A crash leaves an inert temp, a journal that replays the submit idempotently, or a durable entry. A torn journal (invalid JSON) is discarded and the submitter retries with a new id; a valid journal whose entry already exists reports `submit-already-durable`; otherwise it is replayed. A stale per-target lock (older than 30 seconds) is taken over by modification time; a live lock waits up to 200 retries every 10 ms then fails with `STEERING_BUSY`.
+- Steering consume: the journal records the merged consumed ids before the checkpoint (`checkpoint.json` via atomic rename) advances, then is cleared. A crash replays the merged checkpoint idempotently; repeating the same ids returns the same `highestContiguous` plus sorted `consumedIds`. `read` before `consume` never mutates, so a failure or restart between them leaves entries unread for any fresh service instance in any linked worktree.
+- Ownership: `record.json`, `sync.json`, and `snapshots/<stage>.json` are written via temp plus rename under the per-target `queue.lock` with the same 30 second stale takeover. Concurrent planning and governance contenders elect exactly one winner; losers fail with `STALE_GENERATION` and retry on the next generation.
+- Migration: an interrupted promotion leaves at most an inert uniquely-named staging temp. Later calls sweep only stale temps (older than 30 seconds), never a live contender's fresh temp, and revalidate the legacy source before completing the install idempotently. A corrupt canonical copy is repaired only by the holder of the per-artifact `.repairing` guard; a stale guard is taken over by modification time while a live guard makes contenders fail closed with `MIGRATION_CONFLICT` instead of unlinking a concurrent winner.
+
+## Legacy conflict handling
+
+Reconciliation runs before every plan or execution operation and fails closed with structured `MIGRATION_CONFLICT` (`retryable: false`, with `conflicts` listing `artifactType`, `planId`, `reason`, `detail`, `legacyPath`, and `canonicalPath`); no artifact is selected or replaced on conflict. Both sides are preserved for manual review.
+
+- `DIVERGENT_BYTES`: legacy and canonical copies are both valid but differ, or two contenders promoted different bytes and the loser byte-compared instead of overwriting. This also surfaces an active legacy write after a migration instead of last-writer-wins.
+- `CORRUPT_LEGACY_ARTIFACT`, `LEGACY_SCHEMA_MISMATCH`, `LEGACY_ARTIFACT_TYPE_MISMATCH`, `LEGACY_PLAN_ID_MISMATCH`, `LEGACY_IDENTITY_MISMATCH`, `LEGACY_INVALID_METADATA`, `LEGACY_INVALID_MARKDOWN`: the legacy source failed the same validation a canonical write requires (schema 1, matching type and plan ID, current identity, valid `toplevel` plus timestamps, non-empty Markdown within 1 MiB). Nothing is promoted.
+- `INVALID_PLAN_ID`: the legacy file name is not a valid Plan ID.
+- `CONCURRENT_REPAIR`: another contender holds a live repair guard for a corrupt canonical target.
+
+Identical bytes are accepted untouched; disjoint Plan IDs migrate independently without dropping either; valid legacy-only artifacts (including preserved IDs such as `developer-steering-flocky-state-20260901-01`) are staged from freshly validated bytes and installed through the atomic exclusive create that is the single linearization point. To resolve: inspect the named `legacyPath` and `canonicalPath`, decide which whole bytes are authoritative, make the copies byte-identical or remove the stale side only after review, then retry. The legacy root is never auto-deleted.
+
+## Privacy boundary
+
+Only bounded semantic summaries are stored; reasoning transcripts and terminal scrollback are never stored. Any lifecycle, sync, snapshot, or correction text matching `transcript` or `scrollback` (case-insensitive) fails with `SENSITIVE_CONTENT_EXCLUDED` and writes nothing. Closed vocabularies are the only accepted values for owner phase, lifecycle state, sync point, disposition, and snapshot stage; unknown values fail without creating new targets. Field caps are enforced: milestone at most 256 characters, objective and action at most 2048 each, sheepdog target and revision at most 128 each, pending consequential action at most 1024, correction at most 2048, note at most 2048, steering content at most 8192 UTF-8 bytes, Markdown bodies at most 1 MiB, metadata values at most 512 characters. Shepherd-phase agents govern by contracts and results, not by reading worker reasoning: `herdr_agent_response` returns only the latest completed final assistant message after the latest user prompt, excluding intermediate tool-call steps, errors, ignored text, reasoning, and terminal rendering, with UTF-8-safe pagination, HMAC-signed opaque cursors from a random per-plugin-process secret that expire after six hours and do not survive a plugin restart, and pinned session, message, digest, and offset continuations. Shearers receive only fresh bounded context (goal, plan, contract, base and implementation commits, diff, verification results), never the worker conversation. `SHEPHERD_MODE` is injected per OpenCode session and dies with the session; response cursors likewise do not survive a restart. Machine-specific governance permissions and private service instructions belong in a local agent override or `shepherdPermissions` plus `shepherdPromptAppend`, never in this public package; keep secrets out of plugin options because diagnostics may display configuration.
 
 ## Development
 
@@ -462,7 +570,7 @@ npm run check
 npm test
 ```
 
-Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, orchestration state storage and access, Developer steering submission allowlists and denials, append-only ordering, concurrent submissions, unread detection, read-without-consume, restart recovery, idempotent consume, Plan ID isolation, lock and journal recovery, permission parity, absence of steering CLIs, shepherd ownership lifecycle validation, session plus generation fencing, non-owner denial, both-phase race fencing, submission during milestone with consumption after sheepdog yields, each mandatory sync point with disposition before consume, snapshots with pending consequential gating, correction routing with raw-record rejection, no consequential authorization, worker raw-access denial, sensitive-data exclusion, M2 regression, and Git hook behavior on protected, worker, review, governance, and planning pushes.
+Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, orchestration state storage and access, Developer steering submission allowlists and denials, append-only ordering, concurrent submissions, unread detection, read-without-consume, restart recovery, idempotent consume, Plan ID isolation, lock and journal recovery, permission parity, absence of steering CLIs, shepherd ownership lifecycle validation, session plus generation fencing, non-owner denial, both-phase race fencing, submission during milestone with consumption after sheepdog yields, each mandatory sync point with disposition before consume, snapshots with pending consequential gating, correction routing with raw-record rejection, no consequential authorization, worker raw-access denial, sensitive-data exclusion, M2 regression, M4 regression across a real linked worktree common directory plus migration across service instances and processes plus full end to end M1 through M3 submit plus ownership plus sync plus consume plus fail closed conflicts, and Git hook behavior on protected, worker, review, governance, and planning pushes.
 
 ## Releases
 
