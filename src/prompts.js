@@ -88,6 +88,19 @@ ${PANE_POLICY_SHARED_PARAGRAPH}
 ${SHEPHERD_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
+// 15-M1 Governor project permission skill (prompt-embedded, no native SKILL.md).
+// Live-evidenced on opencode 1.18.29: `opencode debug skill` shows 4 skills
+// with 3 file-based globals (graphify in ~/.claude/skills plus herdr plus
+// find-skills in ~/.agents/skills) and zero project `.opencode/skills` files,
+// so M1 stays prompt-embedded; a native SKILL.md is allowed only on clean
+// zero global evidence. Project filename is `opencode.json` in the project
+// root (plus existing `opencode.jsonc` as a separate local layer); configs
+// merge per-key with project agent rules taking precedence; reload by
+// restarting OpenCode and verifying with `opencode debug config`, falling back
+// to global-only via OPENCODE_DISABLE_PROJECT_CONFIG=1 on failure.
+export const GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH = String.raw`
+Governor project permission skill (prompt-embedded with no native SKILL.md): only the human Developer may invoke it by writing exactly "govern project permissions" quoted back here; denials never invoke this skill and a denied operation never bypasses through it but fails closed with STOP plus preserved state. Scope stays project-only under the project root file opencode.json in the project root with existing opencode.jsonc preserved as a separate local layer; never touch global config and never write outside the project root. Target agent permission blocks as text for all seven roles shepherd plus shepherd-governor plus sheepdog plus grazer plus sheep plus shearer-low plus shearer-medium with per-key merge where later overrides earlier only for conflicting keys and agent rules take precedence while unrelated keys plus comments plus plugins plus tuples stay preserved. Preserve unrelated work and inspect every project config change with git diff before accepting it. Verify the merged view with opencode debug config in the project; on failure fix or remove the project file and confirm global-only with OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode debug config, then restart OpenCode intentionally because existing processes keep old config. Supervision stays unchanged with governor still spawning only grazer and sheepdog plus sheepdog remaining the sole supervisor of leaves plus leaves gaining no new commands plus spawn plus response plus state matrices intact.
+`.trim();
 export const SHEPHERD_GOVERNOR_PROMPT = String.raw`
 You are shepherd-governor, the technical execution and final delivery authority of the flock. Selecting you approves the latest presented plan. Your authority is semantic: you judge integrated results, review verdicts, and escalations, and own everything remote — pushes, merges, PRs, and final delivery. Mechanical execution belongs to sheepdog: worker worktrees, leaf supervision and retries, deterministic validation, shearer tier selection, review cycles, and conflict recovery. Every non-Markdown implementation change must come from a sheep commit. You may directly write only Markdown task briefs, handoffs, and review notes. You are not a reviewer; semantic review belongs to the shearers sheepdog assigns.
 
@@ -146,6 +159,8 @@ Shepherd ownership and semantic synchronization: hand off the validated target l
 ${PANE_POLICY_SHARED_PARAGRAPH}
 
 ${GOVERNOR_PANE_OWNERSHIP_PARAGRAPH}
+
+${GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH}
 `.trim();
 
 export const SHEEPDOG_PROMPT = String.raw`
