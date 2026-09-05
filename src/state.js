@@ -39,6 +39,13 @@ const RETIRED_MIGRATION_FILES = Object.freeze([".migration-lock", ".migration-jo
 // touching a live contender's fresh temp.
 const ORPHAN_TEMP_STALE_MS = 30_000;
 
+// Per-artifact repair guards serialize corrupt-canonical repair: only the
+// contender holding the guard may remove the corrupt target, so a repair can
+// never unlink a concurrent winner. A stale guard (holder crashed) is taken
+// over by modification time; a live guard makes contenders fail closed.
+const REPAIR_GUARD_SUFFIX = ".repairing";
+const REPAIR_GUARD_STALE_MS = 30_000;
+
 const SCHEMA_VERSION = 1;
 const FRONTMATTER_DELIMITER = "---";
 
@@ -357,9 +364,14 @@ export function createStateService(options = {}) {
   // Reconciliation is lock-free and idempotent per artifact:
   //
   // - legacy-only artifacts are validated, staged to a unique temp, and
-  //   installed through an atomic exclusive create (`wx`); a lost create
-  //   race re-reads the winner and byte-compares instead of overwriting, so
-  //   concurrent contenders can never produce a divergent promotion;
+  //   installed through an atomic exclusive create (`wx`), which stays the
+  //   single linearization point: a lost create race re-reads the winner
+  //   and byte-compares instead of overwriting, so concurrent contenders
+  //   can never produce a divergent promotion;
+  // - corrupt canonical repair is serialized by a per-artifact repair guard:
+  //   only the guard holder may remove the corrupt target, and any contender
+  //   that cannot claim the guard — or observes an unexpected state inside
+  //   it — fails closed with a structured conflict instead of overwriting;
   // - identical bytes on both sides are accepted without modification;
   // - divergent valid bytes fail closed with a structured MIGRATION_CONFLICT
   //   (no silent selection and no silent replacement);
@@ -494,60 +506,158 @@ export function createStateService(options = {}) {
     };
   }
 
-  // Repairs a corrupt canonical target from the legacy source without blind
-  // overwrites: the legacy source is revalidated immediately before the
-  // repair, and the replacement itself goes through unlink plus an exclusive
-  // create, so a concurrent winner still forces a byte-compare fail-closed.
-  function repairCorruptTarget({ type, planId, layout, legacyTarget, target }) {
-    const fresh = readBytesOptional(legacyTarget);
-    if (fresh.error) return fresh;
-    if (!fresh.present) {
-      return error("MIGRATION_PROMOTE_FAILED", `Legacy artifact ${JSON.stringify(legacyTarget)} disappeared during repair; retry.`, true);
+  // Claims the per-artifact repair guard through an atomic exclusive create.
+  // Returns `{ ok: true }` for the single holder, a retryable error result
+  // when coordination itself fails, or `{ ok: false, conflict }` when another
+  // contender holds a live guard — which fails closed instead of risking a
+  // divergent promotion. A stale guard (holder crashed) is removed and the
+  // claim retried once.
+  function acquireRepairGuard(guard) {
+    const claim = `${process.pid}.${randomBytes(6).toString("hex")}\n`;
+    const concurrentConflict = () => ({
+      ok: false,
+      conflict: {
+        reason: "CONCURRENT_REPAIR",
+        detail: "Another contender is repairing this artifact; failing closed instead of risking a divergent promotion. Retry once it settles.",
+      },
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        fs.writeFileSync(guard, claim, { flag: "wx" });
+        return { ok: true };
+      } catch (cause) {
+        if (cause?.code !== "EEXIST") {
+          return error("MIGRATION_PROMOTE_FAILED", `Unable to coordinate corrupt repair for ${JSON.stringify(guard)}: ${processErrorDetail(cause)}`, true);
+        }
+      }
+      let mtimeMs;
+      try {
+        mtimeMs = fs.statSync(guard).mtimeMs;
+      } catch {
+        continue; // The guard vanished; retry the exclusive claim once.
+      }
+      if (Number.isFinite(mtimeMs) && Date.now() - mtimeMs > REPAIR_GUARD_STALE_MS) {
+        try {
+          fs.unlinkSync(guard);
+        } catch {
+          // Another contender removed or replaced it; retry the claim once.
+        }
+        continue;
+      }
+      return concurrentConflict();
     }
-    const check = inspectLegacyArtifact(type, layout, planId, fresh.bytes);
-    if (!check.ok) {
+    return concurrentConflict();
+  }
+
+  // Repairs a corrupt canonical target from the legacy source without ever
+  // unlinking a concurrent winner: a per-artifact repair guard serializes the
+  // unlink window, both sides are re-read under the guard, and anything other
+  // than the expected corrupt state settles by byte-compare instead of
+  // overwriting. The exclusive install stays the single linearization point,
+  // so two contenders can never both report migrated with divergent bytes:
+  // at most one guard holder repairs, and every other path byte-compares.
+  function repairCorruptTarget({ type, planId, layout, legacyTarget, target }) {
+    const guard = `${target}${REPAIR_GUARD_SUFFIX}`;
+    const claim = acquireRepairGuard(guard);
+    if (claim.error) return claim;
+    if (claim.conflict) {
       return {
         ok: false,
         conflict: {
           artifactType: type,
           planId,
-          reason: check.reason,
-          detail: check.detail,
+          reason: claim.conflict.reason,
+          detail: claim.conflict.detail,
           legacyPath: legacyTarget,
           canonicalPath: target,
         },
       };
     }
     try {
-      fs.unlinkSync(target);
-    } catch (cause) {
-      if (cause?.code !== "ENOENT") {
-        return error("MIGRATION_PROMOTE_FAILED", `Unable to remove the corrupt canonical artifact ${JSON.stringify(target)}: ${processErrorDetail(cause)}`, true);
+      const current = readBytesOptional(target);
+      if (current.error) return current;
+      const fresh = readBytesOptional(legacyTarget);
+      if (fresh.error) return fresh;
+      if (!fresh.present) {
+        return error("MIGRATION_PROMOTE_FAILED", `Legacy artifact ${JSON.stringify(legacyTarget)} disappeared during repair; retry.`, true);
+      }
+      const check = inspectLegacyArtifact(type, layout, planId, fresh.bytes);
+      if (!check.ok) {
+        return {
+          ok: false,
+          conflict: {
+            artifactType: type,
+            planId,
+            reason: check.reason,
+            detail: check.detail,
+            legacyPath: legacyTarget,
+            canonicalPath: target,
+          },
+        };
+      }
+      if (current.present && !parseArtifact(current.bytes.toString("utf8")).error) {
+        // Settled while the guard was claimed: byte-compare, never overwrite.
+        if (current.bytes.equals(fresh.bytes)) return { ok: true, migrated: false };
+        return {
+          ok: false,
+          conflict: {
+            artifactType: type,
+            planId,
+            reason: "DIVERGENT_BYTES",
+            detail: "The canonical artifact settled while repair was coordinated; no side was selected or replaced.",
+            legacyPath: legacyTarget,
+            canonicalPath: target,
+          },
+        };
+      }
+      if (current.present) {
+        try {
+          fs.unlinkSync(target);
+        } catch (cause) {
+          if (cause?.code !== "ENOENT") {
+            return error("MIGRATION_PROMOTE_FAILED", `Unable to remove the corrupt canonical artifact ${JSON.stringify(target)}: ${processErrorDetail(cause)}`, true);
+          }
+          return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
+        }
+      }
+      const installed = installExclusive(target, fresh.bytes);
+      if (installed.error) return installed;
+      if (!installed.installed) {
+        const raced = readBytesOptional(target);
+        if (raced.error) return raced;
+        if (!raced.present) {
+          return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
+        }
+        if (raced.bytes.equals(fresh.bytes)) return { ok: true, migrated: false };
+        if (parseArtifact(raced.bytes.toString("utf8")).error) {
+          return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
+        }
+        return {
+          ok: false,
+          conflict: {
+            artifactType: type,
+            planId,
+            reason: "DIVERGENT_BYTES",
+            detail: "Another contender promoted different valid bytes during repair; no side was selected or replaced.",
+            legacyPath: legacyTarget,
+            canonicalPath: target,
+          },
+        };
+      }
+      const landed = readBytesOptional(target);
+      if (landed.error) return landed;
+      if (!landed.present || !landed.bytes.equals(fresh.bytes)) {
+        return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
+      }
+      return { ok: true, migrated: true };
+    } finally {
+      try {
+        fs.unlinkSync(guard);
+      } catch {
+        // The guard is always released; a crash leaves a stale guard that a
+        // later contender takes over by modification time.
       }
     }
-    const installed = installExclusive(target, fresh.bytes);
-    if (installed.error) return installed;
-    if (installed.installed) return { ok: true, migrated: true };
-    const current = readBytesOptional(target);
-    if (current.error) return current;
-    if (!current.present) {
-      return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
-    }
-    if (current.bytes.equals(fresh.bytes)) return { ok: true, migrated: false };
-    if (parseArtifact(current.bytes.toString("utf8")).error) {
-      return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
-    }
-    return {
-      ok: false,
-      conflict: {
-        artifactType: type,
-        planId,
-        reason: "DIVERGENT_BYTES",
-        detail: "Another contender promoted different valid bytes during repair; no side was selected or replaced.",
-        legacyPath: legacyTarget,
-        canonicalPath: target,
-      },
-    };
   }
 
   function inspectLegacyArtifact(type, layout, planId, bytes) {

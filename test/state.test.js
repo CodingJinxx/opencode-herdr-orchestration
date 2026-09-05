@@ -713,6 +713,80 @@ test("three contenders racing promotion leave exactly one whole artifact and two
   assert.equal(fs.existsSync(path.join(stateRoot(repo), ".migration-lock")), false, "no migration lock is created");
 });
 
+test("repairs a corrupt canonical artifact from validated legacy bytes", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const planId = "repaired-plan";
+  const planBytes = legacyArtifact(repo, "plan", planId, "# Repaired plan\n");
+  seedLegacy(repo, "plans", planId, planBytes);
+  const canonicalDirectory = path.join(stateRoot(repo), "plans");
+  fs.mkdirSync(canonicalDirectory, { recursive: true });
+  const canonicalTarget = path.join(canonicalDirectory, `${planId}.md`);
+  fs.writeFileSync(canonicalTarget, "no frontmatter here\n", "utf8");
+
+  const read = await state.readPlan(planId);
+  assert.equal(read.ok, true);
+  assert.equal(read.artifact.markdown, "# Repaired plan\n");
+  assert.equal(fs.readFileSync(canonicalTarget, "utf8"), planBytes, "the corrupt copy was repaired with the validated legacy bytes");
+  assert.deepEqual(fs.readdirSync(canonicalDirectory), [`${planId}.md`], "no guard or staging temps remain");
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), ".migration-journal")), false, "no shared journal is created");
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), ".migration-lock")), false, "no migration lock is created");
+});
+
+test("two contenders racing corrupt repair elect exactly one winner; the loser fails closed", async () => {
+  const repo = repository();
+  const planId = "race-repair-plan";
+  const legacyBytesX = legacyArtifact(repo, "plan", planId, "# Repaired version X\n");
+  seedLegacy(repo, "plans", planId, legacyBytesX);
+  const canonicalDirectory = path.join(stateRoot(repo), "plans");
+  fs.mkdirSync(canonicalDirectory, { recursive: true });
+  const canonicalTarget = path.join(canonicalDirectory, `${planId}.md`);
+  const legacyTarget = path.join(legacyStateRoot(repo), "plans", `${planId}.md`);
+  fs.writeFileSync(canonicalTarget, "no frontmatter here\n", "utf8");
+
+  // Contender A repairs the corrupt target first.
+  const winner = await service({ cwd: repo.cwd }).readPlan(planId);
+  assert.equal(winner.ok, true, "exactly one contender repairs the corrupt target");
+  assert.equal(fs.readFileSync(canonicalTarget, "utf8"), legacyBytesX);
+
+  // Contender B validated different legacy bytes and observes the target as
+  // still corrupt (its read raced the winner's repair), then loses inside
+  // the repair branch: the guard re-read finds the winner's valid bytes, so
+  // B byte-compares and fails closed instead of unlinking the winner.
+  const legacyBytesY = legacyArtifact(repo, "plan", planId, "# Repaired version Y\n");
+  fs.writeFileSync(legacyTarget, legacyBytesY, "utf8");
+  let staleObserved = false;
+  const racingFs = new Proxy(fs, {
+    get(target, key) {
+      if (key === "readFileSync") {
+        return (...args) => {
+          if (args[0] === canonicalTarget && !staleObserved) {
+            staleObserved = true;
+            return Buffer.from("no frontmatter here\n");
+          }
+          return Reflect.get(target, key)(...args);
+        };
+      }
+      return Reflect.get(target, key);
+    },
+  });
+
+  const loser = await service({ cwd: repo.cwd, fs: racingFs }).readPlan(planId);
+  assert.equal(staleObserved, true, "the loser raced from a corrupt observation");
+  assert.equal(loser.ok, false, "the loser performs no divergent repair");
+  assert.equal(loser.error.code, "MIGRATION_CONFLICT");
+  assert.equal(loser.error.retryable, false);
+  assert.deepEqual(
+    loser.error.conflicts.map((conflict) => [conflict.planId, conflict.reason]),
+    [[planId, "DIVERGENT_BYTES"]],
+  );
+  assert.equal(fs.readFileSync(canonicalTarget, "utf8"), legacyBytesX, "the canonical copy is exactly the winner's whole bytes");
+  assert.equal(fs.readFileSync(legacyTarget, "utf8"), legacyBytesY, "the legacy source is preserved");
+  assert.deepEqual(fs.readdirSync(canonicalDirectory), [`${planId}.md`], "no guard or staging temps remain");
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), ".migration-journal")), false, "no shared journal is created");
+  assert.equal(fs.existsSync(path.join(stateRoot(repo), ".migration-lock")), false, "no migration lock is created");
+});
+
 test("reconciles an active legacy write as a conflict instead of last-writer-wins", async () => {
   const repo = repository();
   const state = service({ cwd: repo.cwd });
