@@ -23,11 +23,21 @@ const ARTIFACT_DIRECTORIES = Object.freeze({
   [ARTIFACT_TYPES.EXECUTION]: "executions",
 });
 
-const MIGRATION_LOCK_FILE = ".migration-lock";
-const MIGRATION_JOURNAL_FILE = ".migration-journal";
 const MIGRATION_TEMP_SUFFIX = ".migrating";
-const MIGRATION_LOCK_STALE_MS = 10_000;
 const MARKDOWN_SUFFIX = ".md";
+
+// Retired M1 coordination files. Earlier revisions created a shared migration
+// lock and a shared write-ahead journal under the canonical root; the
+// lock-free protocol below never creates them, and reconciliation removes
+// leftovers best-effort. They are service-owned coordination state, never
+// user artifacts, so removing them never touches legacy or canonical data.
+const RETIRED_MIGRATION_FILES = Object.freeze([".migration-lock", ".migration-journal"]);
+
+// Staging temps left behind by a crashed promotion are inert: promotion only
+// ever happens from freshly validated legacy bytes through an exclusive
+// create, so a later call safely sweeps another call's stale temp while never
+// touching a live contender's fresh temp.
+const ORPHAN_TEMP_STALE_MS = 30_000;
 
 const SCHEMA_VERSION = 1;
 const FRONTMATTER_DELIMITER = "---";
@@ -343,9 +353,13 @@ export function createStateService(options = {}) {
   // --- Legacy herdr -> canonical Flocky reconciliation -----------------------
   //
   // Before every plan/execution operation the legacy `<git-common-dir>/herdr`
-  // root is reconciled into the canonical `<git-common-dir>/flocky` root:
+  // root is reconciled into the canonical `<git-common-dir>/flocky` root.
+  // Reconciliation is lock-free and idempotent per artifact:
   //
-  // - legacy-only artifacts are validated, staged, and atomically promoted;
+  // - legacy-only artifacts are validated, staged to a unique temp, and
+  //   installed through an atomic exclusive create (`wx`); a lost create
+  //   race re-reads the winner and byte-compares instead of overwriting, so
+  //   concurrent contenders can never produce a divergent promotion;
   // - identical bytes on both sides are accepted without modification;
   // - divergent valid bytes fail closed with a structured MIGRATION_CONFLICT
   //   (no silent selection and no silent replacement);
@@ -353,9 +367,9 @@ export function createStateService(options = {}) {
   //   canonical authority, so an active legacy write is surfaced as a
   //   conflict instead of silently losing to the canonical copy.
   //
-  // A migration lock serializes reconciliation and a write-ahead journal
-  // records staged promotions, so a later service call resumes (rolls the
-  // staged bytes forward) or rolls back an interrupted reconciliation.
+  // Recovery needs no journal: an interrupted promotion leaves at most an
+  // inert uniquely-named staging temp, and any later call revalidates the
+  // legacy source and completes the install idempotently.
 
   function migrationPaths(layout) {
     const canonicalRoot = path.join(layout.identity, STATE_DIR);
@@ -363,8 +377,6 @@ export function createStateService(options = {}) {
     return {
       canonicalRoot,
       legacyRoot,
-      lockPath: path.join(canonicalRoot, MIGRATION_LOCK_FILE),
-      journalPath: path.join(canonicalRoot, MIGRATION_JOURNAL_FILE),
       canonicalDirectory(type) {
         return path.join(canonicalRoot, ARTIFACT_DIRECTORIES[type]);
       },
@@ -396,211 +408,18 @@ export function createStateService(options = {}) {
     return { ok: true, names: names.filter((name) => name.endsWith(MARKDOWN_SUFFIX)) };
   }
 
-  function fileExists(target) {
-    try {
-      fs.statSync(target);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function acquireMigrationLock(paths) {
-    try {
-      fs.mkdirSync(paths.canonicalRoot, { recursive: true });
-    } catch (cause) {
-      return error("MIGRATION_LOCK_FAILED", `Unable to create the Flocky state root: ${processErrorDetail(cause)}`, true);
-    }
-    // Generation-carrying exclusive lease. Takeover is a compare-and-swap on
-    // the observed lease bytes: a contender may only displace the exact stale
-    // lease it observed, so two contenders that share one stale observation
-    // can never both install a valid lease, and an active verified owner is
-    // never silently displaced. Ownership is a monotonic generation: every
-    // takeover installs generation + 1 through an atomic exclusive create,
-    // so at most one contender can win any given installation.
-    const token = randomBytes(12).toString("hex");
-    const payloadFor = (generation) =>
-      JSON.stringify({
-        pid: process.pid,
-        token,
-        generation,
-        acquiredAt: resolveNow(now).toISOString(),
-      });
-    try {
-      fs.writeFileSync(paths.lockPath, payloadFor(0), { encoding: "utf8", flag: "wx" });
-      return { ok: true, token, generation: 0 };
-    } catch (cause) {
-      if (cause?.code !== "EEXIST") {
-        return error("MIGRATION_LOCK_FAILED", `Unable to acquire the migration lock: ${processErrorDetail(cause)}`, true);
-      }
-    }
-    let observed;
-    try {
-      observed = fs.readFileSync(paths.lockPath, "utf8");
-    } catch (cause) {
-      if (cause?.code === "ENOENT") {
-        return error("MIGRATION_BUSY", "The migration lock disappeared while it was being observed; retry.", true);
-      }
-      return error("MIGRATION_LOCK_FAILED", `Unable to read the migration lock: ${processErrorDetail(cause)}`, true);
-    }
-    let existing = null;
-    try {
-      existing = JSON.parse(observed);
-    } catch {
-      existing = null;
-    }
-    const acquiredAt = Date.parse(existing?.acquiredAt ?? "");
-    const observedGeneration = Math.max(0, Number.isFinite(existing?.generation) ? existing.generation : 0);
-    const fresh =
-      Number.isFinite(acquiredAt) &&
-      resolveNow(now).getTime() - acquiredAt < MIGRATION_LOCK_STALE_MS;
-    if (fresh) {
-      return error(
-        "MIGRATION_BUSY",
-        `Another process (pid ${existing?.pid ?? "unknown"}) holds the migration lock acquired at ${existing?.acquiredAt ?? "an unknown time"}; retry once it finishes or the lock goes stale.`,
-        true,
-      );
-    }
-    // Compare-and-swap removal: atomically remove the current lease and act
-    // only if the removed bytes are exactly the stale lease observed above.
-    const removalPath = `${paths.lockPath}.${process.pid}.${randomBytes(6).toString("hex")}.removing`;
-    try {
-      fs.renameSync(paths.lockPath, removalPath);
-    } catch (cause) {
-      if (cause?.code === "ENOENT") {
-        return error("MIGRATION_BUSY", "Another contender removed the stale migration lock first; retry.", true);
-      }
-      return error("MIGRATION_BUSY", `Unable to take over the stale migration lock: ${processErrorDetail(cause)}`, true);
-    }
-    let removed = null;
-    try {
-      removed = fs.readFileSync(removalPath, "utf8");
-    } catch {
-      removed = null;
-    }
-    try {
-      fs.unlinkSync(removalPath);
-    } catch {
-      // The removal record is best-effort; its bytes were read above.
-    }
-    if (removed !== observed) {
-      // The lease changed between observation and removal: another owner
-      // refreshed or took it over. Restore the removed lease and yield.
+  function removeRetiredCoordinationFiles(paths) {
+    for (const name of RETIRED_MIGRATION_FILES) {
       try {
-        fs.writeFileSync(paths.lockPath, removed, { encoding: "utf8", flag: "wx" });
+        fs.unlinkSync(path.join(paths.canonicalRoot, name));
       } catch {
-        // A newer owner already re-created the lock; their lease stands.
+        // Absent or unreadable coordination files need no action.
       }
-      return error(
-        "MIGRATION_BUSY",
-        "The migration lock changed between observation and takeover; retry.",
-        true,
-      );
-    }
-    try {
-      fs.writeFileSync(paths.lockPath, payloadFor(observedGeneration + 1), { encoding: "utf8", flag: "wx" });
-    } catch (cause) {
-      if (cause?.code === "EEXIST") {
-        return error("MIGRATION_BUSY", "Another contender installed a lease while the takeover was in flight; retry.", true);
-      }
-      return error("MIGRATION_LOCK_FAILED", `Unable to install the migration lease: ${processErrorDetail(cause)}`, true);
-    }
-    return { ok: true, token, generation: observedGeneration + 1, recovered: true };
-  }
-
-  function releaseMigrationLock(paths, token) {
-    if (typeof token !== "string" || token.length === 0) return;
-    // Ownership-safe release: atomically remove the lock, verify the removed
-    // payload still carries this owner's token, and restore the current
-    // owner's lease untouched when it does not.
-    const removedPath = `${paths.lockPath}.${process.pid}.${randomBytes(6).toString("hex")}.releasing`;
-    let removed;
-    try {
-      fs.renameSync(paths.lockPath, removedPath);
-      // The renamed record is exactly the payload atomically removed above.
-      removed = fs.readFileSync(removedPath, "utf8");
-    } catch {
-      try {
-        fs.unlinkSync(removedPath);
-      } catch {
-        // Nothing was removed, so there is nothing to clean or restore.
-      }
-      return; // Nothing to release.
-    }
-    let payload = null;
-    try {
-      payload = JSON.parse(removed);
-    } catch {
-      payload = null;
-    }
-    try {
-      fs.unlinkSync(removedPath);
-    } catch {
-      // The lease is released even when the removal record cannot be cleaned.
-    }
-    if (payload?.token === token) {
-      return;
-    }
-    // The lease was taken over mid-operation; restore the current owner's
-    // lease without clobbering any newer lease installed in the meantime.
-    try {
-      fs.writeFileSync(paths.lockPath, removed, { encoding: "utf8", flag: "wx" });
-    } catch {
-      // A newer owner already holds the lock; their lease stands.
     }
   }
 
-  function readMigrationJournal(journalPath) {
-    let text;
-    try {
-      text = fs.readFileSync(journalPath, "utf8");
-    } catch (cause) {
-      if (cause?.code === "ENOENT") return { ok: true, entries: [] };
-      return error("MIGRATION_JOURNAL_READ_FAILED", `Unable to read the migration journal: ${processErrorDetail(cause)}`, true);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (cause) {
-      return error("MIGRATION_JOURNAL_CORRUPT", `Migration journal is not valid JSON: ${processErrorDetail(cause)}`);
-    }
-    if (!Array.isArray(parsed)) {
-      return error("MIGRATION_JOURNAL_CORRUPT", "Migration journal must contain a JSON array of staged promotions.");
-    }
-    return { ok: true, entries: parsed.filter((entry) => entry && typeof entry === "object") };
-  }
-
-  function writeMigrationJournal(journalPath, entries) {
-    const temp = `${journalPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      fs.writeFileSync(temp, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
-      fs.renameSync(temp, journalPath);
-    } catch (cause) {
-      try {
-        fs.unlinkSync(temp);
-      } catch {
-        // The temp file may not exist when the write itself failed.
-      }
-      return error("MIGRATION_JOURNAL_WRITE_FAILED", `Unable to update the migration journal: ${processErrorDetail(cause)}`, true);
-    }
-    return { ok: true };
-  }
-
-  function appendMigrationJournal(journalPath, entry) {
-    const journal = readMigrationJournal(journalPath);
-    if (journal.error) return journal;
-    return writeMigrationJournal(journalPath, [...journal.entries, entry]);
-  }
-
-  function removeMigrationJournalEntry(journalPath, entry) {
-    const journal = readMigrationJournal(journalPath);
-    if (journal.error) return journal;
-    const remaining = journal.entries.filter((candidate) => candidate?.temp !== entry.temp);
-    if (remaining.length === journal.entries.length) return { ok: true };
-    return writeMigrationJournal(journalPath, remaining);
-  }
-
-  function sweepOrphanStagedFiles(paths, protectedTemps) {
+  function sweepStaleStagingTemps(paths) {
+    const cutoff = Date.now() - ORPHAN_TEMP_STALE_MS;
     for (const type of Object.values(ARTIFACT_TYPES)) {
       const directory = paths.canonicalDirectory(type);
       let names;
@@ -612,102 +431,123 @@ export function createStateService(options = {}) {
       for (const name of names) {
         if (!name.endsWith(MIGRATION_TEMP_SUFFIX)) continue;
         const target = path.join(directory, name);
-        if (protectedTemps?.has(target)) continue;
+        let mtimeMs;
+        try {
+          mtimeMs = fs.statSync(target).mtimeMs;
+        } catch {
+          continue;
+        }
+        // Only stale temps are swept: a live contender's fresh temp is never
+        // touched, and staging temps are inert until promoted from freshly
+        // validated legacy bytes through an exclusive create.
+        if (!Number.isFinite(mtimeMs) || mtimeMs > cutoff) continue;
         try {
           fs.unlinkSync(target);
         } catch {
-          // Best-effort sweep; the file no longer participates in any promotion.
+          // Best-effort sweep; the temp stays inert either way.
         }
       }
     }
   }
 
-  function recoverInterruptedMigration(paths, layout) {
-    const journal = readMigrationJournal(paths.journalPath);
-    if (journal.error) return journal;
-    if (journal.entries.length === 0) {
-      sweepOrphanStagedFiles(paths);
-      return { ok: true, promoted: 0 };
+  function installExclusive(target, bytes) {
+    try {
+      fs.writeFileSync(target, bytes, { flag: "wx" });
+      return { ok: true, installed: true };
+    } catch (cause) {
+      if (cause?.code === "EEXIST") return { ok: true, installed: false };
+      return error("MIGRATION_STAGE_FAILED", `Unable to install canonical artifact ${JSON.stringify(target)}: ${processErrorDetail(cause)}`, true);
     }
-    const promoted = [];
-    const unresolved = [];
-    const conflicts = [];
-    const retained = [];
-    for (const entry of journal.entries) {
-      const temp = typeof entry.temp === "string" ? entry.temp : null;
-      const target = typeof entry.target === "string" ? entry.target : null;
-      const type = ARTIFACT_TYPE_VALUES.has(entry.artifactType) ? entry.artifactType : null;
-      const planId = typeof entry.planId === "string" ? entry.planId : null;
-      if (!temp || !target || !type || !planId) continue; // Malformed entries carry no staged bytes.
-      if (!fileExists(temp)) continue; // Missing temp: roll back by dropping the entry.
-      if (fileExists(target)) {
-        const targetBytes = readBytesOptional(target);
-        if (targetBytes.error) {
-          unresolved.push({ entry, cause: new Error(targetBytes.error.message) });
-          continue;
-        }
-        const stagedBytes = readBytesOptional(temp);
-        if (stagedBytes.error) {
-          unresolved.push({ entry, cause: new Error(stagedBytes.error.message) });
-          continue;
-        }
-        if (stagedBytes.bytes.equals(targetBytes.bytes)) {
-          // The promotion already landed with identical bytes; drop the entry.
-          try {
-            fs.unlinkSync(temp);
-          } catch {
-            // An identical leftover temp is swept once the entry is dropped.
-          }
-          continue;
-        }
-        const targetCheck = inspectLegacyArtifact(type, layout, planId, targetBytes.bytes);
-        if (targetCheck.ok) {
-          // Never roll staged bytes over a divergent valid canonical artifact:
-          // retain the staged bytes and journal evidence, and fail closed.
-          conflicts.push({
-            artifactType: type,
-            planId,
-            reason: "DIVERGENT_BYTES",
-            detail: "Interrupted recovery staged bytes that diverge from a valid canonical artifact; no side was selected or replaced.",
-            stagedPath: temp,
-            canonicalPath: target,
-          });
-          retained.push(entry);
-          continue;
-        }
-        // The canonical target carries no valid state, so the validated
-        // staged bytes repair it through the normal atomic promotion.
+  }
+
+  // Settles one validated promotion against the canonical target without ever
+  // overwriting it: the exclusive create is the single linearization point,
+  // and a lost race re-reads the winner and byte-compares instead. Returns
+  // `{ ok, migrated }`, a retryable error result, or `{ ok: false, conflict }`
+  // for the caller to collect into a fail-closed MIGRATION_CONFLICT.
+  function settlePromotionTarget({ type, planId, legacyTarget, target, bytes }) {
+    const installed = installExclusive(target, bytes);
+    if (installed.error) return installed;
+    if (installed.installed) return { ok: true, migrated: true };
+    // Another contender installed first: byte-compare, never overwrite.
+    const current = readBytesOptional(target);
+    if (current.error) return current;
+    if (!current.present) {
+      return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during promotion; retry.`, true);
+    }
+    if (current.bytes.equals(bytes)) {
+      return { ok: true, migrated: false }; // Idempotent: the canonical copy already carries these bytes.
+    }
+    if (parseArtifact(current.bytes.toString("utf8")).error) {
+      return repairCorruptTarget({ type, planId, legacyTarget, target });
+    }
+    return {
+      ok: false,
+      conflict: {
+        artifactType: type,
+        planId,
+        reason: "DIVERGENT_BYTES",
+        detail: "Another contender promoted different valid bytes first; no side was selected or replaced.",
+        legacyPath: legacyTarget,
+        canonicalPath: target,
+      },
+    };
+  }
+
+  // Repairs a corrupt canonical target from the legacy source without blind
+  // overwrites: the legacy source is revalidated immediately before the
+  // repair, and the replacement itself goes through unlink plus an exclusive
+  // create, so a concurrent winner still forces a byte-compare fail-closed.
+  function repairCorruptTarget({ type, planId, layout, legacyTarget, target }) {
+    const fresh = readBytesOptional(legacyTarget);
+    if (fresh.error) return fresh;
+    if (!fresh.present) {
+      return error("MIGRATION_PROMOTE_FAILED", `Legacy artifact ${JSON.stringify(legacyTarget)} disappeared during repair; retry.`, true);
+    }
+    const check = inspectLegacyArtifact(type, layout, planId, fresh.bytes);
+    if (!check.ok) {
+      return {
+        ok: false,
+        conflict: {
+          artifactType: type,
+          planId,
+          reason: check.reason,
+          detail: check.detail,
+          legacyPath: legacyTarget,
+          canonicalPath: target,
+        },
+      };
+    }
+    try {
+      fs.unlinkSync(target);
+    } catch (cause) {
+      if (cause?.code !== "ENOENT") {
+        return error("MIGRATION_PROMOTE_FAILED", `Unable to remove the corrupt canonical artifact ${JSON.stringify(target)}: ${processErrorDetail(cause)}`, true);
       }
-      try {
-        // Roll forward: finish the interrupted atomic promotion.
-        fs.renameSync(temp, target);
-        promoted.push(entry);
-      } catch (cause) {
-        unresolved.push({ entry, cause });
-      }
     }
-    const remaining = [...unresolved.map(({ entry }) => entry), ...retained];
-    const written = writeMigrationJournal(paths.journalPath, remaining);
-    if (written.error) return written;
-    if (conflicts.length > 0) {
-      return error(
-        "MIGRATION_CONFLICT",
-        `Interrupted migration recovery found ${conflicts.length} staged promotion(s) diverging from valid canonical artifacts; the staged bytes and journal evidence are retained and no artifact was selected or replaced. Resolve the named files and retry.`,
-        false,
-        { conflicts },
-      );
+    const installed = installExclusive(target, fresh.bytes);
+    if (installed.error) return installed;
+    if (installed.installed) return { ok: true, migrated: true };
+    const current = readBytesOptional(target);
+    if (current.error) return current;
+    if (!current.present) {
+      return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
     }
-    if (unresolved.length > 0) {
-      return error(
-        "MIGRATION_PROMOTE_FAILED",
-        `Unable to resume ${unresolved.length} interrupted migration promotion(s): ${unresolved
-          .map(({ entry, cause }) => `${JSON.stringify(entry.planId ?? entry.target)} (${processErrorDetail(cause)})`)
-          .join("; ")}. The journal retains the staged entries for a later retry.`,
-        true,
-      );
+    if (current.bytes.equals(fresh.bytes)) return { ok: true, migrated: false };
+    if (parseArtifact(current.bytes.toString("utf8")).error) {
+      return error("MIGRATION_PROMOTE_FAILED", `Canonical artifact ${JSON.stringify(target)} changed during repair; retry.`, true);
     }
-    sweepOrphanStagedFiles(paths, new Set(retained.map((entry) => entry.temp)));
-    return { ok: true, promoted: promoted.length };
+    return {
+      ok: false,
+      conflict: {
+        artifactType: type,
+        planId,
+        reason: "DIVERGENT_BYTES",
+        detail: "Another contender promoted different valid bytes during repair; no side was selected or replaced.",
+        legacyPath: legacyTarget,
+        canonicalPath: target,
+      },
+    };
   }
 
   function inspectLegacyArtifact(type, layout, planId, bytes) {
@@ -775,7 +615,7 @@ export function createStateService(options = {}) {
     return { ok: true };
   }
 
-  function promoteLegacyArtifact(paths, type, planId, canonicalDirectory, target, bytes) {
+  function promoteLegacyArtifact({ type, planId, legacyTarget, canonicalDirectory, target, bytes }) {
     let temp;
     try {
       fs.mkdirSync(canonicalDirectory, { recursive: true });
@@ -791,134 +631,111 @@ export function createStateService(options = {}) {
       }
       return error("MIGRATION_STAGE_FAILED", `Unable to stage legacy ${type} artifact ${JSON.stringify(planId)}: ${processErrorDetail(cause)}`, true);
     }
-    const entry = {
-      artifactType: type,
-      planId,
-      temp,
-      target,
-      stagedAt: resolveNow(now).toISOString(),
-    };
-    const appended = appendMigrationJournal(paths.journalPath, entry);
-    if (appended.error) {
+    try {
+      return settlePromotionTarget({ type, planId, legacyTarget, target, bytes });
+    } finally {
       try {
         fs.unlinkSync(temp);
       } catch {
-        // The staged temp is removed with the journal write that protected it.
+        // Each contender always cleans its own staging temp; a crash leaves
+        // an inert orphan that later calls sweep once stale.
       }
-      return appended;
     }
-    try {
-      fs.renameSync(temp, target); // Atomic, validation-preserving promotion.
-    } catch (cause) {
-      // The journal entry stays behind so a later service call can roll the
-      // staged bytes forward (temp still present) or roll back (temp gone).
-      return error("MIGRATION_PROMOTE_FAILED", `Unable to promote staged legacy ${type} artifact ${JSON.stringify(planId)}: ${processErrorDetail(cause)}`, true);
-    }
-    removeMigrationJournalEntry(paths.journalPath, entry);
-    return { ok: true };
   }
 
   async function reconcileLegacyState(layout) {
     const paths = migrationPaths(layout);
-    const lock = acquireMigrationLock(paths);
-    if (lock.error) return lock;
-    try {
-      const recovered = recoverInterruptedMigration(paths, layout);
-      if (recovered.error) return recovered;
+    removeRetiredCoordinationFiles(paths);
+    sweepStaleStagingTemps(paths);
 
-      const conflicts = [];
-      const migrated = [];
-      for (const type of [ARTIFACT_TYPES.PLAN, ARTIFACT_TYPES.EXECUTION]) {
-        const legacyDirectory = paths.legacyDirectory(type);
-        const canonicalDirectory = paths.canonicalDirectory(type);
-        const listed = listLegacyArtifactNames(legacyDirectory);
-        if (listed.error) return listed;
-        for (const name of listed.names) {
-          const planId = name.slice(0, -MARKDOWN_SUFFIX.length);
-          const legacyTarget = path.join(legacyDirectory, name);
-          const canonicalTarget = path.join(canonicalDirectory, `${planId}${MARKDOWN_SUFFIX}`);
-          if (!PLAN_ID_PATTERN.test(planId)) {
-            conflicts.push({
-              artifactType: type,
-              planId,
-              reason: "INVALID_PLAN_ID",
-              detail: "Legacy artifact file name is not a valid plan ID.",
-              legacyPath: legacyTarget,
-              canonicalPath: null,
-            });
-            continue;
-          }
-          const legacyBytes = readBytesOptional(legacyTarget);
-          if (legacyBytes.error) return legacyBytes;
-          const canonicalBytes = readBytesOptional(canonicalTarget);
-          if (canonicalBytes.error) return canonicalBytes;
-
-          if (canonicalBytes.present && canonicalBytes.bytes.equals(legacyBytes.bytes)) {
-            continue; // Identical bytes: the canonical copy already carries the legacy state.
-          }
-
-          if (canonicalBytes.present && parseArtifact(canonicalBytes.bytes.toString("utf8")).error) {
-            // The canonical copy carries no parsable state, so the validated
-            // legacy copy repairs it through the normal staged promotion.
-            const legacyCheck = inspectLegacyArtifact(type, layout, planId, legacyBytes.bytes);
-            if (!legacyCheck.ok) {
-              conflicts.push({
-                artifactType: type,
-                planId,
-                reason: legacyCheck.reason,
-                detail: legacyCheck.detail,
-                legacyPath: legacyTarget,
-                canonicalPath: canonicalTarget,
-              });
-              continue;
-            }
-            const repaired = promoteLegacyArtifact(paths, type, planId, canonicalDirectory, canonicalTarget, legacyBytes.bytes);
-            if (repaired.error) return repaired;
-            migrated.push({ artifactType: type, planId, path: canonicalTarget });
-            continue;
-          }
-
-          const legacyCheck = inspectLegacyArtifact(type, layout, planId, legacyBytes.bytes);
-          if (!legacyCheck.ok) {
-            conflicts.push({
-              artifactType: type,
-              planId,
-              reason: legacyCheck.reason,
-              detail: legacyCheck.detail,
-              legacyPath: legacyTarget,
-              canonicalPath: canonicalTarget,
-            });
-            continue;
-          }
-          if (canonicalBytes.present) {
-            conflicts.push({
-              artifactType: type,
-              planId,
-              reason: "DIVERGENT_BYTES",
-              detail: "Legacy and canonical artifacts are both valid but differ; no side was selected or replaced.",
-              legacyPath: legacyTarget,
-              canonicalPath: canonicalTarget,
-            });
-            continue;
-          }
-          const promotion = promoteLegacyArtifact(paths, type, planId, canonicalDirectory, canonicalTarget, legacyBytes.bytes);
-          if (promotion.error) return promotion;
-          migrated.push({ artifactType: type, planId, path: canonicalTarget });
+    const conflicts = [];
+    const migrated = [];
+    for (const type of [ARTIFACT_TYPES.PLAN, ARTIFACT_TYPES.EXECUTION]) {
+      const legacyDirectory = paths.legacyDirectory(type);
+      const canonicalDirectory = paths.canonicalDirectory(type);
+      const listed = listLegacyArtifactNames(legacyDirectory);
+      if (listed.error) return listed;
+      for (const name of listed.names) {
+        const planId = name.slice(0, -MARKDOWN_SUFFIX.length);
+        const legacyTarget = path.join(legacyDirectory, name);
+        const canonicalTarget = path.join(canonicalDirectory, `${planId}${MARKDOWN_SUFFIX}`);
+        if (!PLAN_ID_PATTERN.test(planId)) {
+          conflicts.push({
+            artifactType: type,
+            planId,
+            reason: "INVALID_PLAN_ID",
+            detail: "Legacy artifact file name is not a valid plan ID.",
+            legacyPath: legacyTarget,
+            canonicalPath: null,
+          });
+          continue;
         }
-      }
+        const legacyBytes = readBytesOptional(legacyTarget);
+        if (legacyBytes.error) return legacyBytes;
+        if (!legacyBytes.present) continue; // Vanished mid-scan; nothing to reconcile.
+        const canonicalBytes = readBytesOptional(canonicalTarget);
+        if (canonicalBytes.error) return canonicalBytes;
 
-      if (conflicts.length > 0) {
-        return error(
-          "MIGRATION_CONFLICT",
-          `Legacy state reconciliation found ${conflicts.length} unresolvable conflict(s) between ${JSON.stringify(paths.legacyRoot)} and ${JSON.stringify(paths.canonicalRoot)}; no artifact was selected or replaced. Resolve the named files and retry.`,
-          false,
-          { conflicts },
-        );
+        if (canonicalBytes.present && canonicalBytes.bytes.equals(legacyBytes.bytes)) {
+          continue; // Identical bytes: the canonical copy already carries the legacy state.
+        }
+
+        if (canonicalBytes.present && parseArtifact(canonicalBytes.bytes.toString("utf8")).error) {
+          // The canonical copy carries no parsable state, so the legacy
+          // source repairs it through fresh revalidation plus unlink and an
+          // exclusive create — never a blind overwrite.
+          const repaired = repairCorruptTarget({ type, planId, layout, legacyTarget, target: canonicalTarget });
+          if (repaired.error) return repaired;
+          if (repaired.conflict) {
+            conflicts.push(repaired.conflict);
+            continue;
+          }
+          if (repaired.migrated) migrated.push({ artifactType: type, planId, path: canonicalTarget });
+          continue;
+        }
+
+        const legacyCheck = inspectLegacyArtifact(type, layout, planId, legacyBytes.bytes);
+        if (!legacyCheck.ok) {
+          conflicts.push({
+            artifactType: type,
+            planId,
+            reason: legacyCheck.reason,
+            detail: legacyCheck.detail,
+            legacyPath: legacyTarget,
+            canonicalPath: canonicalTarget,
+          });
+          continue;
+        }
+        if (canonicalBytes.present) {
+          conflicts.push({
+            artifactType: type,
+            planId,
+            reason: "DIVERGENT_BYTES",
+            detail: "Legacy and canonical artifacts are both valid but differ; no side was selected or replaced.",
+            legacyPath: legacyTarget,
+            canonicalPath: canonicalTarget,
+          });
+          continue;
+        }
+        const promotion = promoteLegacyArtifact({ type, planId, legacyTarget, canonicalDirectory, target: canonicalTarget, bytes: legacyBytes.bytes });
+        if (promotion.error) return promotion;
+        if (promotion.conflict) {
+          conflicts.push(promotion.conflict);
+          continue;
+        }
+        if (promotion.migrated) migrated.push({ artifactType: type, planId, path: canonicalTarget });
       }
-      return { ok: true, migrated };
-    } finally {
-      releaseMigrationLock(paths, lock.token);
     }
+
+    if (conflicts.length > 0) {
+      return error(
+        "MIGRATION_CONFLICT",
+        `Legacy state reconciliation found ${conflicts.length} unresolvable conflict(s) between ${JSON.stringify(paths.legacyRoot)} and ${JSON.stringify(paths.canonicalRoot)}; no artifact was selected or replaced. Resolve the named files and retry.`,
+        false,
+        { conflicts },
+      );
+    }
+    return { ok: true, migrated };
   }
 
   return {
