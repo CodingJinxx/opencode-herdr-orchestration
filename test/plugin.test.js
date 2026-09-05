@@ -641,3 +641,80 @@ test("21-M1 sheepdog scoped tuple applies only to sheepdog with lifecycle retain
     assert.doesNotMatch(config.agent[name].prompt, /private squad tools/);
   }
 });
+
+// --- 20-M1 responsive wait taxonomy through the plugin tool ------------------
+
+function m1WaitHerdr(status) {
+  return JSON.stringify({
+    result: {
+      agent: {
+        agent_status: status,
+        agent_session: { agent: "opencode", kind: "id", source: "herdr:opencode", value: "ses_worker" },
+      },
+    },
+  });
+}
+
+function m1WaitExport(text = "FINALIZE\nwait done") {
+  return JSON.stringify({
+    messages: [
+      { info: { id: "u1", role: "user" }, parts: [] },
+      {
+        info: { id: "a1", sessionID: "ses_worker", role: "assistant", parentID: "u1", agent: "grazer", finish: "stop", time: { completed: 2 } },
+        parts: [{ type: "text", text }],
+      },
+    ],
+  });
+}
+
+function m1WaitContext(agent) {
+  return { agent, abort: new AbortController().signal, metadata() {} };
+}
+
+test("20-M1 plugin response tool keeps distinct wait codes with Sheepdog routine handling", async () => {
+  const forStatus = (status) => async (command) => {
+    if (command === "herdr") return m1WaitHerdr(status);
+    return m1WaitExport();
+  };
+  const settled = await plugin({}, { response: { run: forStatus("done"), secret: Buffer.alloc(32, 40) } });
+  assert.equal(JSON.parse(await settled.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("shepherd"))).ok, true);
+
+  const working = await plugin({}, { response: { run: forStatus("working"), secret: Buffer.alloc(32, 41) } });
+  assert.equal(JSON.parse(await working.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("shepherd"))).error.code, "AGENT_NOT_SETTLED");
+
+  const blocked = await plugin({}, { response: { run: forStatus("blocked"), secret: Buffer.alloc(32, 42) } });
+  const blockedResult = JSON.parse(await blocked.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("sheepdog")));
+  assert.equal(blockedResult.error.code, "AGENT_BLOCKED");
+  assert.match(blockedResult.error.message, /never blind input/);
+
+  const failed = await plugin({}, { response: { run: forStatus("failed"), secret: Buffer.alloc(32, 43) } });
+  assert.equal(JSON.parse(await failed.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("sheepdog"))).error.code, "AGENT_ERROR");
+
+  const missing = await plugin({}, {
+    response: {
+      run: async (command) => {
+        if (command === "herdr") throw Object.assign(new Error("agent_not_found"), { stderr: "agent_not_found" });
+        throw new Error("unexpected");
+      },
+      secret: Buffer.alloc(32, 44),
+    },
+  });
+  assert.equal(JSON.parse(await missing.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("sheepdog"))).error.code, "AGENT_NOT_FOUND");
+
+  // Sheepdog retrieves owned flock roles through the allowed matrix; governor stays banned from sheep.
+  const sheepRun = async (command) => {
+    if (command === "herdr") return m1WaitHerdr("done");
+    return JSON.stringify({
+      messages: [
+        { info: { id: "u1", role: "user" }, parts: [] },
+        {
+          info: { id: "a1", sessionID: "ses_worker", role: "assistant", parentID: "u1", agent: "sheep", finish: "stop", time: { completed: 2 } },
+          parts: [{ type: "text", text: "FINALIZE\nsheep done" }],
+        },
+      ],
+    });
+  };
+  const sheepdogHooks = await plugin({}, { response: { run: sheepRun, secret: Buffer.alloc(32, 45) } });
+  assert.equal(JSON.parse(await sheepdogHooks.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("sheepdog"))).ok, true);
+  assert.equal(JSON.parse(await sheepdogHooks.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("shepherd-governor"))).error.code, "UNSUPPORTED_WORKER_ROLE");
+});

@@ -698,3 +698,74 @@ test("21-M1 sheepdog scoped override guard stays scoped and shadows fail closed"
   assert.throws(() => createAgents({ sheepdogPromptAppend: 42 }), /sheepdogPromptAppend must be a string/);
   assert.throws(() => createAgents({ shepherdPromptAppend: 42 }), /shepherdPromptAppend must be a string/);
 });
+
+// --- 20-M1 responsive wait mechanics -----------------------------------------
+
+test("20-M1 Shepherd plus Sheepdog prompts describe the bounded poll loop", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const prompt = agents[name].prompt;
+    assert.match(prompt, /bounded poll loop/, `${name} names the bounded loop`);
+    assert.match(prompt, /short interval/, `${name} polls on a short interval`);
+    assert.match(prompt, /herdr agent get/, `${name} polls via get`);
+    assert.match(prompt, /working means continue/, `${name} working means continue`);
+    assert.match(prompt, /idle or done means retrieve/, `${name} settled means retrieve`);
+    assert.match(prompt, /herdr_agent_response until complete/, `${name} retrieves until complete`);
+    assert.match(prompt, /blocked means inspect/, `${name} blocked means inspect`);
+    assert.match(prompt, /never blind input/, `${name} never blind input`);
+    assert.match(prompt, /surface immediately with .*distinct structured code/, `${name} early failures stay distinct`);
+    assert.match(prompt, /instead of decaying to timeout/, `${name} never decays to timeout`);
+    assert.match(prompt, /disappearance.*explicit/, `${name} disappearance gets explicit report`);
+    assert.match(prompt, /safety timeout stays the final bound only/, `${name} safety timeout is final bound`);
+    assert.match(prompt, /WAIT_TIMEOUT_EXPIRED/, `${name} names the timeout code`);
+    assert.match(prompt, /Retries stay bounded/, `${name} retries stay bounded`);
+    assert.match(prompt, /Treat unknown as inconclusive/, `${name} keeps unknown inconclusive`);
+  }
+  assert.match(agents.sheepdog.prompt, /herdr agent wait/, "sheepdog keeps wait as bounded sleep");
+  assert.match(agents.sheepdog.prompt, /herdr agent get plus herdr agent read/, "sheepdog keeps get plus read checks");
+  assert.match(agents.sheepdog.prompt, /content-safe/, "sheepdog keeps content-safe rule");
+  assert.match(agents.shepherd.prompt, /routine flock waits belong to sheepdog/, "shepherd defers routine waits to sheepdog");
+  assert.match(agents["shepherd-governor"].prompt, /routine flock waits belong to sheepdog/, "governor defers routine waits to sheepdog");
+  assert.match(agents.sheepdog.prompt, /no per-transition Shepherd wakeups/, "sheepdog owns waits without per-transition wakeups");
+});
+
+test("20-M1 lifecycle allows stay to already-permitted surfaces with no new commands", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const bash = agents[name].permission.bash;
+    for (const key of ["herdr agent prompt*", "herdr agent wait*", "herdr agent get*", "herdr agent read*", "herdr agent list*"]) {
+      assert.equal(bash[key], "allow", `${name} keeps ${key} for bounded polling`);
+    }
+    for (const invented of [
+      "herdr events*",
+      "herdr agent events*",
+      "herdr agent logs*",
+      "herdr agent stream*",
+      "herdr agent tail*",
+      "herdr event*",
+    ]) {
+      assert.equal(bash[invented], undefined, `${name} must not invent ${invented}`);
+      assert.equal(m1EvaluateBash(bash, invented.replace("*", " squad_1")), "deny", `${invented} stays denied for ${name}`);
+    }
+  }
+  const governorBash = agents["shepherd-governor"].permission.bash;
+  assert.equal(governorBash[spawnPattern("sheep")], undefined, "governor leaf spawn ban untouched");
+  assert.equal(governorBash[spawnPattern("shearer-low")], undefined, "governor shearer ban untouched");
+  assert.match(agents["shepherd-governor"].prompt, /Never prompt.*sheep/, "governor leaf prompt ban untouched");
+  for (const role of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal(agents.sheepdog.permission.bash[spawnPattern(role)], "allow", `sheepdog keeps owned ${role} waits`);
+  }
+});
+
+test("20-M1 Sheepdog owns routine flock handling with unknown inconclusive preserved", () => {
+  const agents = createAgents();
+  assert.match(agents.sheepdog.prompt, /You own routine flock waits/, "sheepdog owns routine waits");
+  assert.match(agents.sheepdog.prompt, /You own leaf retries/, "sheepdog keeps leaf retries");
+  assert.match(agents.shepherd.prompt, /no per-transition Shepherd wakeups/, "shepherd has no per-transition wakeups");
+  assert.match(agents["shepherd-governor"].prompt, /never wait on sheep or shearer/, "governor never waits on leaves directly");
+  for (const prompt of [agents.shepherd.prompt, agents["shepherd-governor"].prompt, agents.sheepdog.prompt]) {
+    assert.match(prompt, /unknown as inconclusive/, "unknown stays inconclusive in every wait loop");
+    assert.doesNotMatch(prompt, /herdr agent events/, "no stream invented in prompts");
+    assert.doesNotMatch(prompt, /herdr agent logs/, "no log stream invented in prompts");
+  }
+});

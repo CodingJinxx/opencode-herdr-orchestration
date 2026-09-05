@@ -227,6 +227,10 @@ Normal lifecycle failures return structured errors such as:
 
 Cursor continuations do not query Herdr again, so a worker may begin another turn or leave the live agent list after the initial page. The response remains pinned as long as the OpenCode session and message still exist and are unchanged. Cursors expire after six hours by default and do not survive a restart of the shepherd's OpenCode plugin process.
 
+### Responsive wait mechanics (20-M1)
+
+Waits use a bounded `herdr agent get` poll loop on a short interval (about 10 seconds) with no invented event stream: `working` means continue, `idle`/`done` means retrieve via `herdr_agent_response` until `complete` is true, `blocked` means inspect with `get` plus `read` then decide with never blind input. Start/prompt command failures surface immediately with their distinct code instead of decaying to timeout; disappearance (`agent_not_found`, vanished from `herdr agent list`) gets an explicit report; safety timeout stays the final bound only as `WAIT_TIMEOUT_EXPIRED`. Distinct codes are `AGENT_NOT_SETTLED`, `AGENT_BLOCKED`, `AGENT_ERROR`, `AGENT_NOT_FOUND`, `HERDR_UNAVAILABLE`, and `WAIT_TIMEOUT_EXPIRED`; retries stay bounded and `unknown` stays inconclusive. Sheepdog owns routine flock waits with no per-transition Shepherd wakeups.
+
 ## Installation
 
 Install or update the plugin with the cross-platform npm CLI:

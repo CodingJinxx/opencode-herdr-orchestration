@@ -19,6 +19,51 @@ export const RESPONSE_MATRIX = new Map([
   ["sheepdog", new Set(["grazer", "sheep", "shearer-low", "shearer-medium"])],
 ]);
 const SETTLED_STATES = new Set(["idle", "done"]);
+// 20-M1 responsive wait taxonomy (bounded `herdr agent get` polling default; no
+// event stream evidenced in-repo, so no stream command is invented). Evidenced
+// vocabulary: `idle`/`done` settled, `working` continue, `blocked` inspect with
+// never blind input, missing/`unknown` inconclusive. `error`/`failed` is the
+// explicit error shape handled distinctly as AGENT_ERROR; any other
+// unrecognized status stays inconclusive (AGENT_NOT_SETTLED) to avoid inventing
+// CLI behavior. Disappearance (`agent_not_found`) stays AGENT_NOT_FOUND with an
+// explicit report. Command failures stay HERDR_UNAVAILABLE immediately, never
+// decayed to timeout. Safety timeout expiry is the prompt-level final bound and
+// surfaces as WAIT_TIMEOUT_EXPIRED via waitTimeoutError, distinct from early
+// failures. Retries stay bounded; unknown stays inconclusive, never complete.
+export const AGENT_WORKING_STATUS = "working";
+export const AGENT_BLOCKED_STATUS = "blocked";
+const AGENT_ERROR_STATUSES = new Set(["error", "failed"]);
+export const WAIT_TIMEOUT_CODE = "WAIT_TIMEOUT_EXPIRED";
+export const AGENT_BLOCKED_CODE = "AGENT_BLOCKED";
+export const AGENT_ERROR_CODE = "AGENT_ERROR";
+
+export function classifyAgentStatus(status) {
+  if (SETTLED_STATES.has(status)) {
+    return { settled: true, code: null, retryable: false, action: "retrieve" };
+  }
+  if (status === AGENT_WORKING_STATUS) {
+    return { settled: false, code: "AGENT_NOT_SETTLED", retryable: true, action: "continue" };
+  }
+  if (status === AGENT_BLOCKED_STATUS) {
+    return { settled: false, code: AGENT_BLOCKED_CODE, retryable: true, action: "inspect" };
+  }
+  if (status === undefined || status === null || status === "unknown") {
+    return { settled: false, code: "AGENT_NOT_SETTLED", retryable: true, action: "continue", inconclusive: true };
+  }
+  if (typeof status === "string" && AGENT_ERROR_STATUSES.has(status)) {
+    return { settled: false, code: AGENT_ERROR_CODE, retryable: false, action: "report" };
+  }
+  return { settled: false, code: "AGENT_NOT_SETTLED", retryable: true, action: "continue", inconclusive: true };
+}
+
+export function waitTimeoutError(target, timeoutMs) {
+  const bound = Number.isSafeInteger(timeoutMs) ? ` within ${timeoutMs} ms safety timeout` : " within the safety timeout";
+  return error(
+    WAIT_TIMEOUT_CODE,
+    `Herdr agent ${target} did not settle${bound}; safety timeout is the final bound only with preserved state, not a retryable working state.`,
+    false,
+  );
+}
 const DEFAULT_PAGE_BYTES = 8192;
 const MIN_PAGE_BYTES = 1024;
 const MAX_PAGE_BYTES = 16384;
@@ -275,10 +320,26 @@ async function resolveInitialResponse(target, run, signal, maxExportBytes, allow
     if (detail.includes("agent_not_found")) return error("AGENT_NOT_FOUND", `Herdr agent ${target} was not found.`);
     return error("HERDR_UNAVAILABLE", `Unable to query Herdr agent ${target}: ${detail}`, true);
   }
-  if (!SETTLED_STATES.has(agent?.agent_status)) {
+  const waitStatus = agent?.agent_status;
+  if (!SETTLED_STATES.has(waitStatus)) {
+    const classified = classifyAgentStatus(waitStatus);
+    if (classified.code === AGENT_BLOCKED_CODE) {
+      return error(
+        AGENT_BLOCKED_CODE,
+        `Herdr agent ${target} is blocked; inspect with herdr agent get plus herdr agent read then decide under user safety constraints with never blind input.`,
+        true,
+      );
+    }
+    if (classified.code === AGENT_ERROR_CODE) {
+      return error(
+        AGENT_ERROR_CODE,
+        `Herdr agent ${target} is ${waitStatus}; explicit error state requires an explicit report with preserved state.`,
+        false,
+      );
+    }
     return error(
       "AGENT_NOT_SETTLED",
-      `Herdr agent ${target} is ${agent?.agent_status ?? "unknown"}; wait for idle or done.`,
+      `Herdr agent ${target} is ${waitStatus ?? "unknown"}; wait for idle or done.`,
       true,
     );
   }

@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 
 import {
   ACKNOWLEDGEMENT_REPLIES,
+  AGENT_BLOCKED_CODE,
+  AGENT_ERROR_CODE,
   MILESTONE_REPLIES,
   RESPONSE_MATRIX,
+  WAIT_TIMEOUT_CODE,
+  classifyAgentStatus,
   createResponseService,
   findPinnedResponse,
   parseWorkerReply,
   selectLatestCompletedResponse,
+  waitTimeoutError,
 } from "../src/response.js";
 
 function user(id, created = 1) {
@@ -393,4 +398,113 @@ test("21-M1 sheepdog retrieves each owned role and denies the governor", async (
     "UNSUPPORTED_WORKER_ROLE",
     "sheepdog must not retrieve the governor",
   );
+});
+
+// --- 20-M1 responsive wait failure taxonomy ----------------------------------
+
+test("20-M1 settlement via idle or done retrieves through the authoritative channel", async () => {
+  for (const status of ["idle", "done"]) {
+    const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "settled done" })]);
+    const retrieve = createResponseService({ run: runner(() => fixture, status), secret: Buffer.alloc(32, 20) });
+    const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
+    assert.equal(result.ok, true, `${status} must settle`);
+    assert.equal(result.text, "settled done");
+  }
+});
+
+test("20-M1 working stays AGENT_NOT_SETTLED with bounded retry", async () => {
+  const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x" })]);
+  const retrieve = createResponseService({ run: runner(() => fixture, "working"), secret: Buffer.alloc(32, 21) });
+  const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
+  assert.equal(result.error.code, "AGENT_NOT_SETTLED");
+  assert.equal(result.error.retryable, true);
+  assert.match(result.error.message, /working/);
+  const classified = classifyAgentStatus("working");
+  assert.equal(classified.code, "AGENT_NOT_SETTLED");
+  assert.equal(classified.action, "continue");
+});
+
+test("20-M1 early command failure stays distinct from safety timeout", async () => {
+  const failing = createResponseService({
+    run: async (command) => {
+      if (command === "herdr") throw Object.assign(new Error("herdr agent get: connection refused"), { stderr: "connection refused" });
+      throw new Error("unexpected");
+    },
+    secret: Buffer.alloc(32, 22),
+  });
+  const early = await failing({ target: "worker_1" }, contextFor("shepherd"));
+  assert.equal(early.error.code, "HERDR_UNAVAILABLE");
+  assert.equal(early.error.retryable, true);
+  const timeout = waitTimeoutError("worker_1", 60000);
+  assert.equal(timeout.error.code, WAIT_TIMEOUT_CODE);
+  assert.equal(timeout.error.code, "WAIT_TIMEOUT_EXPIRED");
+  assert.equal(timeout.error.retryable, false);
+  assert.notEqual(early.error.code, timeout.error.code, "early failure must not decay to timeout");
+  assert.match(timeout.error.message, /final bound/);
+});
+
+test("20-M1 disappearance gets an explicit AGENT_NOT_FOUND report", async () => {
+  const missing = createResponseService({
+    run: async (command) => {
+      if (command === "herdr") throw Object.assign(new Error("agent_not_found: worker_1"), { stderr: "agent_not_found" });
+      throw new Error("unexpected");
+    },
+    secret: Buffer.alloc(32, 23),
+  });
+  const result = await missing({ target: "worker_1" }, contextFor("shepherd"));
+  assert.equal(result.error.code, "AGENT_NOT_FOUND");
+  assert.equal(result.error.retryable, false);
+  assert.match(result.error.message, /was not found/);
+});
+
+test("20-M1 evidenced explicit error state stays distinct from working", async () => {
+  for (const status of ["error", "failed"]) {
+    const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x" })]);
+    const retrieve = createResponseService({ run: runner(() => fixture, status), secret: Buffer.alloc(32, 24) });
+    const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
+    assert.equal(result.error.code, AGENT_ERROR_CODE, `${status} must be explicit error`);
+    assert.equal(result.error.retryable, false);
+    assert.match(result.error.message, /explicit error state/);
+  }
+  const blockedFixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x" })]);
+  const blockedRetrieve = createResponseService({ run: runner(() => blockedFixture, "blocked"), secret: Buffer.alloc(32, 24) });
+  const blocked = await blockedRetrieve({ target: "worker_1" }, contextFor("shepherd"));
+  assert.equal(blocked.error.code, AGENT_BLOCKED_CODE);
+  assert.equal(blocked.error.retryable, true);
+  assert.match(blocked.error.message, /never blind input/);
+});
+
+test("20-M1 safety timeout expiry helper is distinct and final", () => {
+  const timeout = waitTimeoutError("worker_1", 120000);
+  assert.equal(timeout.ok, false);
+  assert.equal(timeout.error.code, "WAIT_TIMEOUT_EXPIRED");
+  assert.equal(timeout.error.retryable, false);
+  assert.match(timeout.error.message, /safety timeout is the final bound only/);
+  const classifiedWorking = classifyAgentStatus("working");
+  assert.notEqual(classifiedWorking.code, timeout.error.code);
+});
+
+test("20-M1 unknown stays inconclusive, never complete", async () => {
+  const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: "x" })]);
+  for (const status of [undefined, "unknown"]) {
+    const agentPayload = status === undefined ? { agent_session: { agent: "opencode", kind: "id", source: "herdr:opencode", value: "ses_worker" } } : undefined;
+    const run = async (command) => {
+      if (command === "herdr") {
+        if (status === undefined) return JSON.stringify({ result: { agent: agentPayload } });
+        return herdrAgent(status);
+      }
+      return `Exporting session: ses_worker\n${JSON.stringify(fixture)}`;
+    };
+    const retrieve = createResponseService({ run, secret: Buffer.alloc(32, 25) });
+    const result = await retrieve({ target: "worker_1" }, contextFor("shepherd"));
+    assert.equal(result.error.code, "AGENT_NOT_SETTLED", `unknown (${String(status)}) stays inconclusive`);
+    assert.equal(result.error.retryable, true);
+    assert.equal(result.ok, false, "unknown must never read as complete");
+  }
+  for (const status of ["working", "blocked", "error", "unknown", undefined]) {
+    const classified = classifyAgentStatus(status ?? "unknown");
+    assert.equal(classified.settled, false, `${String(status)} never settles`);
+  }
+  assert.equal(classifyAgentStatus("idle").settled, true);
+  assert.equal(classifyAgentStatus("done").settled, true);
 });

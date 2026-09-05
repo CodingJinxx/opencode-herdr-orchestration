@@ -38,6 +38,12 @@ const safeGitInspection = {
   "git ls-files": "allow",
 };
 
+// 20-M1 responsive wait: bounded `herdr agent get` polling uses only the
+// already-permitted prompt plus wait plus get plus read plus list surfaces.
+// No event stream command is evidenced, so no new Herdr command is invented;
+// `herdr agent wait` stays a bounded sleep between `get` state checks and the
+// safety timeout stays the final bound only. Sheepdog owns routine flock waits
+// with no per-transition Shepherd wakeups; governor leaf bans stay untouched.
 const herdrInspection = {
   "Get-Item Env:HERDR_ENV": "allow",
   "herdr --help": "allow",
