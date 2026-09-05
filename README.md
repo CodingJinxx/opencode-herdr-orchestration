@@ -44,6 +44,10 @@ Developer (the human operator, one per flock)
         └── shearer-medium              independent review, medium reasoning
 ```
 
+### Governor prompt scoping residual
+
+`shepherd-governor` prompts only `grazer` and `sheepdog` workers it spawned. Direct Shepherd to Sheep task management is forbidden even as recovery: neither `shepherd` nor `shepherd-governor` may spawn, prompt, wait on, or retrieve `sheep` or shearer workers directly when a worker is unavailable, blocked, or denied. Name-based prompt patterns cannot encode worker role, so governor `herdr agent prompt` plus `wait` plus `get` plus `read` patterns stay broad as far as text matchers permit. Prompt bans plus start denial plus the response matrix are the load-bearing layers: start denial allows only `grazer` and `sheepdog` creation and the response matrix allows only `grazer` and `sheepdog` retrieval. A denied lifecycle operation must produce `STOP` plus an explicit configuration failure report naming the missing capability, with never any auto fallback to direct sheep execution. `sheepdog` remains the sole supervisor of leaves and the sole path for bounded recovery contracts.
+
 ## Roles and authorities
 
 | Agent | Tier | Direct mutation | Spawns | Git authority |
@@ -455,7 +459,7 @@ node .\bin\orchestration.js uninstall-hooks
 
 ## Worker interruption
 
-Herdr currently exposes `send-keys`, not a narrower agent interrupt command. Shepherd-phase agents retain it to send Ctrl+C only after confirming that a worker is genuinely stuck. Prompts prohibit using worker terminals to type implementation commands or bypass shepherd permissions. Sheepdog is further scoped to Ctrl-C-only replacement semantics as far as Bash matchers permit: the broad `herdr agent send-keys*` allow is replaced by an explicit deny plus narrow `C-c` and `ctrl+c` `--keys` spellings, with separator denies still global last and inspect-first plus never-type plus never-bypass staying primary in `SHEEPDOG_PROMPT`.
+Herdr currently exposes `send-keys`, not a narrower agent interrupt command. Shepherd-phase agents retain it to send Ctrl+C only after confirming that a worker is genuinely stuck. Prompts prohibit using worker terminals to type implementation commands or bypass shepherd permissions. Sheepdog is further scoped to Ctrl-C-only replacement semantics as far as Bash matchers permit: the broad `herdr agent send-keys*` allow is replaced by an explicit deny plus narrow `C-c` and `ctrl+c` `--keys` spellings, with separator denies still global last and inspect-first plus never-type plus never-bypass staying primary in `SHEEPDOG_PROMPT`. Governor is likewise scoped to Ctrl-C-only replacement semantics in `src/agents.js` with the same residual: the broad allow is denied and only narrow Ctrl-C spellings are evaluation-effective, with separator denies still global last and the governor prompt inspect-first plus never-type plus never-bypass rule staying primary.
 
 This restriction is not hard-enforced by Herdr. Matchers are string globs and cannot prove semantic intent or enumerate every Herdr spelling, so a crafted `send-keys` that matches a narrow Ctrl-C glob but carries extra intent remains possible; a native `herdr agent interrupt <target>` command would close that capability gap.
 

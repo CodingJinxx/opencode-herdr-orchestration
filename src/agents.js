@@ -228,6 +228,30 @@ const SHEEPDOG_SEND_KEYS_CTRL_C_ALLOWS = {
   "herdr agent send-keys * ctrl+c*": "allow",
 };
 
+// Governor Herdr prompt residual (21-M2): `herdr agent prompt` plus wait plus
+// get plus read patterns are name-based and cannot encode worker role, so they
+// stay broad as far as text matchers permit. Prompt bans plus start denial
+// (spawn matrix allows only grazer and sheepdog) plus the response matrix
+// (retrieval allows only grazer and sheepdog) are the load-bearing layers;
+// see SHEPHERD_GOVERNOR_PROMPT and README Governor prompt scoping residual.
+// Governor interrupt bound (21-M2): replacement for the broad
+// "herdr agent send-keys*" allow in shared herdrInspection, mirroring the
+// sheepdog M1 bound. The broad pattern is explicitly denied first so only the
+// narrow Ctrl-C spellings below are evaluation-effective. Matchers are string
+// globs and cannot prove semantic intent, so the prompt inspect-first plus
+// never-type plus never-bypass rule stays primary.
+const GOVERNOR_SEND_KEYS_DENY = {
+  "herdr agent send-keys*": "deny",
+};
+const GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS = {
+  "herdr agent send-keys * --keys C-c*": "allow",
+  "herdr agent send-keys * --keys c-c*": "allow",
+  "herdr agent send-keys * --keys ctrl+c*": "allow",
+  "herdr agent send-keys * --keys Ctrl+C*": "allow",
+  "herdr agent send-keys * C-c*": "allow",
+  "herdr agent send-keys * ctrl+c*": "allow",
+};
+
 const SHEEPDOG_DENIALS = {
   "git push*": "deny",
   "git pull*": "deny",
@@ -417,6 +441,8 @@ export function createAgents(options = {}) {
           "gh pr create*": "allow",
           "gh pr view*": "allow",
           "gh pr checks*": "allow",
+          ...GOVERNOR_SEND_KEYS_DENY,
+          ...GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS,
           ...separatorDenials,
         },
         task: "deny",

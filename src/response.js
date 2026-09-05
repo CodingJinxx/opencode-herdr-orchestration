@@ -5,6 +5,14 @@ import { promisify } from "node:util";
 import { tool } from "@opencode-ai/plugin";
 
 const execFileAsync = promisify(execFile);
+// Response matrix (21-M2 load-bearing layer): Herdr prompt patterns are
+// name-based and cannot encode worker role, so governor prompts stay broad as
+// far as text matchers permit. Prompt bans plus start denial (spawn matrix
+// allows only grazer and sheepdog for the governor) plus this matrix (retrieval
+// allows only grazer and sheepdog for the governor) enforce the boundary.
+// Bypass retrieval attempts fail closed with UNSUPPORTED_WORKER_ROLE and must
+// surface as STOP plus a configuration failure naming the missing capability,
+// never auto-fallback to direct sheep execution.
 export const RESPONSE_MATRIX = new Map([
   ["shepherd", new Set(["grazer"])],
   ["shepherd-governor", new Set(["grazer", "sheepdog"])],
