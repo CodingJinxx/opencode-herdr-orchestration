@@ -6,7 +6,7 @@ import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { ARTIFACT_TYPES, createStateService } from "../src/state.js";
+import { ARTIFACT_TYPES, createStateService, MAX_STEERING_BYTES, STEERING_SCHEMA_VERSION } from "../src/state.js";
 
 const FIXED_TIME = new Date("2026-08-31T12:00:00.000Z");
 
@@ -819,4 +819,240 @@ test("reconciles an active legacy write as a conflict instead of last-writer-win
     second,
     "the active legacy write was not silently lost",
   );
+});
+
+function steeringRoot(repo) {
+  return path.join(repo.commonDir, "flocky", "steering");
+}
+
+function steeringEntries(repo, planId) {
+  return path.join(steeringRoot(repo), planId, "entries");
+}
+
+test("steering publishes an immutable entry with service-assigned sequence, opaque id, timestamp, provenance, identity, and schema", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const submitted = await state.submitSteering({ planId: "steer-plan-01", content: "Hold the line on scope." });
+  assert.equal(submitted.ok, true);
+  const entry = submitted.entry;
+  assert.equal(entry.schema, STEERING_SCHEMA_VERSION);
+  assert.equal(entry.sequence, 1);
+  assert.match(entry.id, /^st_[0-9a-f]{16}$/);
+  assert.equal(entry.planId, "steer-plan-01");
+  assert.equal(entry.identity, repo.commonDir);
+  assert.equal(entry.content, "Hold the line on scope.");
+  assert.equal(typeof entry.createdAt, "string");
+  assert.ok(Number.isFinite(Date.parse(entry.createdAt)));
+  assert.deepEqual(entry.provenance, {
+    submitter: "developer",
+    integration: "integration-asserted Developer context; not an authenticated human",
+  });
+  const fileName = `${String(1).padStart(10, "0")}-${entry.id}.json`;
+  const stored = JSON.parse(fs.readFileSync(path.join(steeringEntries(repo, "steer-plan-01"), fileName), "utf8"));
+  assert.deepEqual(stored, entry);
+  assert.equal(fs.existsSync(path.join(steeringRoot(repo), "steer-plan-01", "queue.lock")), false);
+  assert.equal(fs.existsSync(path.join(steeringRoot(repo), "steer-plan-01", "queue.journal")), false);
+});
+
+test("steering appends multiple ordered records immutably", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const first = await state.submitSteering({ planId: "ordered-plan", content: "First directive." });
+  const second = await state.submitSteering({ planId: "ordered-plan", content: "Second directive." });
+  const third = await state.submitSteering({ planId: "ordered-plan", content: "Third directive." });
+  assert.equal(first.entry.sequence, 1);
+  assert.equal(second.entry.sequence, 2);
+  assert.equal(third.entry.sequence, 3);
+  assert.notEqual(first.entry.id, second.entry.id);
+  assert.notEqual(second.entry.id, third.entry.id);
+  const names = fs.readdirSync(steeringEntries(repo, "ordered-plan")).sort();
+  assert.equal(names.length, 3);
+  const read = await state.readSteering("ordered-plan");
+  assert.equal(read.ok, true);
+  assert.deepEqual(read.entries.map((entry) => entry.sequence), [1, 2, 3]);
+  assert.deepEqual(read.entries.map((entry) => entry.content), ["First directive.", "Second directive.", "Third directive."]);
+  // Immutable: earlier files are untouched by later submits.
+  assert.ok(read.entries[0].id === first.entry.id && read.entries[0].content === "First directive.");
+});
+
+test("steering handles concurrent submissions with scoped lock and exclusive create", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const results = await Promise.all(
+    ["Alpha.", "Beta.", "Gamma.", "Delta.", "Epsilon."].map((content) => state.submitSteering({ planId: "concurrent-plan", content })),
+  );
+  for (const result of results) assert.equal(result.ok, true);
+  const sequences = results.map((result) => result.entry.sequence).sort((a, b) => a - b);
+  assert.deepEqual(sequences, [1, 2, 3, 4, 5]);
+  const ids = new Set(results.map((result) => result.entry.id));
+  assert.equal(ids.size, 5);
+  const names = fs.readdirSync(steeringEntries(repo, "concurrent-plan")).sort();
+  assert.equal(names.length, 5);
+  const read = await state.readSteering("concurrent-plan");
+  assert.equal(read.entries.length, 5);
+  assert.deepEqual(read.entries.map((entry) => entry.sequence), [1, 2, 3, 4, 5]);
+});
+
+test("steering rejects unbounded content and non-planId schemas without filesystem writes", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  for (const content of ["", null, 42, "x".repeat(MAX_STEERING_BYTES + 1)]) {
+    const failure = await state.submitSteering({ planId: "bounded-plan", content });
+    assert.equal(failure.ok, false);
+    assert.equal(failure.error.code, "INVALID_STEERING_CONTENT");
+  }
+  const extra = await state.submitSteering({ planId: "bounded-plan", content: "ok", extra: "nope" });
+  assert.equal(extra.ok, false);
+  assert.equal(extra.error.code, "INVALID_REQUEST");
+  const missing = await state.submitSteering({ planId: "bounded-plan" });
+  assert.equal(missing.ok, false);
+  for (const planId of ["../escape", "", ".hidden", null, 42]) {
+    const failure = await state.submitSteering({ planId, content: "ok" });
+    assert.equal(failure.ok, false);
+  }
+  assert.equal(fs.existsSync(steeringRoot(repo)), false);
+});
+
+test("steering resolves explicit planId or infers only one active target else AMBIGUOUS_TARGET with no repository-wide steering", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const none = await state.submitSteering({ content: "No target given." });
+  assert.equal(none.ok, false);
+  assert.equal(none.error.code, "AMBIGUOUS_TARGET");
+  assert.equal(fs.existsSync(steeringRoot(repo)), false);
+
+  const first = await state.submitSteering({ planId: "infer-a", content: "Seed A." });
+  assert.equal(first.ok, true);
+  const inferred = await state.submitSteering({ content: "Inferred to the only target." });
+  assert.equal(inferred.ok, true);
+  assert.equal(inferred.entry.planId, "infer-a");
+  assert.equal(inferred.entry.sequence, 2);
+
+  const secondTarget = await state.submitSteering({ planId: "infer-b", content: "Seed B." });
+  assert.equal(secondTarget.ok, true);
+  const ambiguous = await state.submitSteering({ content: "Two targets, must fail." });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.error.code, "AMBIGUOUS_TARGET");
+  assert.equal(ambiguous.error.retryable, false);
+  // No repository-wide entry was created.
+  assert.equal(fs.existsSync(path.join(steeringEntries(repo, "infer-a"), `${String(3).padStart(10, "0")}-x.json`)), false);
+  const checkA = await state.checkSteering("infer-a");
+  const checkB = await state.checkSteering("infer-b");
+  assert.equal(checkA.total, 2);
+  assert.equal(checkB.total, 1);
+});
+
+test("steering check shows unread without loading bodies and read returns ordered exact unread with no mutation", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  await state.submitSteering({ planId: "unread-plan", content: "One." });
+  await state.submitSteering({ planId: "unread-plan", content: "Two." });
+  await state.submitSteering({ planId: "unread-plan", content: "Three." });
+
+  const check = await state.checkSteering("unread-plan");
+  assert.equal(check.ok, true);
+  assert.equal(check.planId, "unread-plan");
+  assert.equal(check.total, 3);
+  assert.equal(check.unread, 3);
+  assert.equal(check.nextSequence, 4);
+  assert.equal(check.highestContiguous, 0);
+
+  const firstRead = await state.readSteering("unread-plan");
+  assert.equal(firstRead.ok, true);
+  assert.deepEqual(firstRead.entries.map((entry) => entry.sequence), [1, 2, 3]);
+  const secondRead = await state.readSteering("unread-plan");
+  assert.deepEqual(secondRead.entries.map((entry) => entry.id), firstRead.entries.map((entry) => entry.id));
+
+  // Read performed no mutation: checkpoint still shows zero consumed.
+  const after = await state.checkSteering("unread-plan");
+  assert.equal(after.unread, 3);
+  assert.equal(after.highestContiguous, 0);
+});
+
+test("steering failure and restart between read and consume leaves unread", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  await state.submitSteering({ planId: "restart-plan", content: "Directive one." });
+  await state.submitSteering({ planId: "restart-plan", content: "Directive two." });
+
+  const read = await state.readSteering("restart-plan");
+  assert.equal(read.entries.length, 2);
+  // Simulated failure: the consumer crashes before consume; a fresh service
+  // instance restarts and must still see both as unread.
+  const restarted = service({ cwd: repo.cwd });
+  const reread = await restarted.readSteering("restart-plan");
+  assert.equal(reread.entries.length, 2);
+  assert.deepEqual(reread.entries.map((entry) => entry.id), read.entries.map((entry) => entry.id));
+  const check = await restarted.checkSteering("restart-plan");
+  assert.equal(check.unread, 2);
+});
+
+test("steering consume is idempotent and checkpoint holds highest contiguous plus consumed ids", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const one = await state.submitSteering({ planId: "consume-plan", content: "One." });
+  const two = await state.submitSteering({ planId: "consume-plan", content: "Two." });
+  const three = await state.submitSteering({ planId: "consume-plan", content: "Three." });
+
+  // Non-contiguous consume: 1 and 3 leave highest at 1.
+  const partial = await state.consumeSteering({ planId: "consume-plan", ids: [one.entry.id, three.entry.id] });
+  assert.equal(partial.ok, true);
+  assert.equal(partial.checkpoint.highestContiguous, 1);
+  assert.deepEqual([...partial.checkpoint.consumedIds].sort(), [one.entry.id, three.entry.id].sort());
+  const readAfterPartial = await state.readSteering("consume-plan");
+  assert.deepEqual(readAfterPartial.entries.map((entry) => entry.sequence), [2]);
+
+  // Completing the gap advances contiguously to 3.
+  const completed = await state.consumeSteering({ planId: "consume-plan", ids: [two.entry.id] });
+  assert.equal(completed.checkpoint.highestContiguous, 3);
+  assert.equal(completed.unread, 0);
+  const idempotent = await state.consumeSteering({ planId: "consume-plan", ids: [one.entry.id, two.entry.id, three.entry.id] });
+  assert.equal(idempotent.ok, true);
+  assert.equal(idempotent.checkpoint.highestContiguous, 3);
+  assert.deepEqual(idempotent.checkpoint.consumedIds, completed.checkpoint.consumedIds);
+  const empty = await state.readSteering("consume-plan");
+  assert.equal(empty.entries.length, 0);
+
+  const unknown = await state.consumeSteering({ planId: "consume-plan", ids: ["st_ffffffffffffffff"] });
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.error.code, "STEERING_NOT_FOUND");
+});
+
+test("steering isolates unrelated Plan IDs with per-target scoped ordering", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  const a1 = await state.submitSteering({ planId: "plan-A", content: "A one." });
+  const b1 = await state.submitSteering({ planId: "plan-B", content: "B one." });
+  const a2 = await state.submitSteering({ planId: "plan-A", content: "A two." });
+  assert.equal(a1.entry.sequence, 1);
+  assert.equal(b1.entry.sequence, 1);
+  assert.equal(a2.entry.sequence, 2);
+
+  const consumedA = await state.consumeSteering({ planId: "plan-A", ids: [a1.entry.id, a2.entry.id] });
+  assert.equal(consumedA.checkpoint.highestContiguous, 2);
+  const checkB = await state.checkSteering("plan-B");
+  assert.equal(checkB.unread, 1);
+  assert.equal(checkB.highestContiguous, 0);
+  const readB = await state.readSteering("plan-B");
+  assert.equal(readB.entries.length, 1);
+  assert.equal(readB.entries[0].content, "B one.");
+});
+
+test("steering recovers a stale scoped lock and a torn journal without losing durable entries", async () => {
+  const repo = repository();
+  const state = service({ cwd: repo.cwd });
+  await state.submitSteering({ planId: "recover-plan", content: "Durable one." });
+  const targetDir = path.join(steeringRoot(repo), "recover-plan");
+  const lockPath = path.join(targetDir, "queue.lock");
+  fs.writeFileSync(lockPath, "stale-holder\n", "utf8");
+  fs.utimesSync(lockPath, new Date("2020-01-01T00:00:00.000Z"), new Date("2020-01-01T00:00:00.000Z"));
+  fs.writeFileSync(path.join(targetDir, "queue.journal"), "{ torn", "utf8");
+
+  const second = await state.submitSteering({ planId: "recover-plan", content: "Durable two." });
+  assert.equal(second.ok, true);
+  assert.equal(second.entry.sequence, 2);
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.existsSync(path.join(targetDir, "queue.journal")), false);
+  const read = await state.readSteering("recover-plan");
+  assert.deepEqual(read.entries.map((entry) => entry.sequence), [1, 2]);
 });

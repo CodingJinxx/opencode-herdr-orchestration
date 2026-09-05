@@ -439,6 +439,14 @@ Herdr currently exposes `send-keys`, not a narrower agent interrupt command. She
 
 This restriction is not hard-enforced by Herdr. A native `herdr agent interrupt <target>` command would close that capability gap.
 
+## Developer steering (M2 primitives only)
+
+Developer steering is a trusted-Developer queue scoped per Plan ID target under `<git-common-dir>/flocky/steering/<planId>/`. There is exactly one submission tool, `herdr_steering_submit`, registered through the existing plugin mechanism. The submission allowlist holds only the explicit non-flock `developer` context; `shepherd`, `shepherd-governor`, `sheepdog`, `grazer`, `sheep`, `shearer-low`, `shearer-medium`, `unknown`, `ambiguous`, `none`, and unset contexts are denied fail-closed with no filesystem write. Developer is never inferred from session mode, directory, environment text, or prompt content. Static per-agent permissions deny the tool for all seven orchestration roles as defense in depth; the runtime `context.agent` check stays authoritative over static overrides.
+
+Submissions carry bounded content (at most 8192 UTF-8 bytes) plus an optional explicit `planId` only. Target resolution uses the explicit `planId` or infers only when exactly one active steering target exists, else fails closed with `AMBIGUOUS_TARGET` and no repository-wide steering. Each publication is immutable per target with a service-assigned sequence, opaque steering id, timestamp, trusted provenance, target identity, bounded content, and schema version. Queue reads are `check` (unread counts without loading bodies), `read` (ordered exact unread with no mutation), and idempotent `consume` (advances only after durable checkpoint disposition; the checkpoint holds the highest contiguous consumed sequence plus consumed ids). Per-Plan-ID ordering isolates unrelated plans. Mutations use a scoped per-target lock via exclusive create plus a journal via atomic rename with stale takeover and replay, so interruption is recoverable.
+
+Provenance honesty: the recorded `developer` submitter is integration-asserted by the OpenCode plugin runtime (`context.agent === "developer"`), never an authenticated human. Any session that can present as `developer` — including a custom-configured `developer` agent — can submit. Flock roles cannot present as Developer: `developer` is not a registered orchestration agent, no spawn matrix creates it, and flock permissions deny the tool. Keep remote authorization and human review as the authoritative controls. There is no `herdr steer` command and no package CLI steering command; M3 shepherd ownership, lifecycle, and consumption are explicitly out of scope.
+
 ## Development
 
 ```bash
@@ -446,7 +454,7 @@ npm run check
 npm test
 ```
 
-Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, orchestration state storage and access, and Git hook behavior on protected, worker, review, governance, and planning pushes.
+Tests cover topology, model variants, permissions, override merging, session mode isolation, response selection, signed cursors, UTF-8 pagination, concurrent response reads, tool authorization, orchestration state storage and access, Developer steering submission allowlists and denials, append-only ordering, concurrent submissions, unread detection, read-without-consume, restart recovery, idempotent consume, Plan ID isolation, lock and journal recovery, permission parity, absence of steering CLIs, and Git hook behavior on protected, worker, review, governance, and planning pushes.
 
 ## Releases
 

@@ -2,8 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 
-import { createAgents, mergeAgent, STATE_TOOL_ACCESS } from "../src/agents.js";
-import { createStateTools, modeForAgent } from "../src/index.js";
+import {
+  createAgents,
+  DEVELOPER_AGENT,
+  mergeAgent,
+  ORCHESTRATION_ROLES,
+  STATE_TOOL_ACCESS,
+  STEERING_TOOL_ACCESS,
+  STEERING_TOOLS,
+} from "../src/agents.js";
+import { createStateTools, createSteeringTools, modeForAgent } from "../src/index.js";
 import {
   GRAZER_PROMPT,
   SHEEPDOG_PROMPT,
@@ -421,4 +429,57 @@ test("separates leaf work from coordinator acknowledgement and milestone replies
   assert.match(SHEEP_PROMPT, /CONTINUE, CORRECT, REPLAN, STOP, or FINALIZE/);
   assert.match(GRAZER_PROMPT, /FINALIZE followed by the findings/);
   assert.match(SHEARER_REVIEW_PROMPT, /FINALIZE followed by exactly one verdict/);
+});
+
+test("denies Developer steering submission to all seven orchestration roles as defense in depth", () => {
+  const agents = createAgents();
+  assert.deepEqual([...ORCHESTRATION_ROLES].sort(), [
+    "grazer",
+    "shearer-low",
+    "shearer-medium",
+    "sheep",
+    "sheepdog",
+    "shepherd",
+    "shepherd-governor",
+  ]);
+  assert.equal(DEVELOPER_AGENT, "developer");
+  assert.ok(!ORCHESTRATION_ROLES.includes(DEVELOPER_AGENT));
+  for (const role of ORCHESTRATION_ROLES) {
+    assert.equal(agents[role].permission[STEERING_TOOLS.submit], "deny", `${role} must deny ${STEERING_TOOLS.submit}`);
+  }
+});
+
+test("keeps steering submission parity between static permissions and runtime allowlist", async () => {
+  const tools = createSteeringTools({ cwd: tmpdir() });
+  assert.ok(tools[STEERING_TOOLS.submit], `plugin registers ${STEERING_TOOLS.submit}`);
+  assert.deepEqual([...STEERING_TOOL_ACCESS.keys()], [STEERING_TOOLS.submit]);
+  assert.deepEqual([...STEERING_TOOL_ACCESS.get(STEERING_TOOLS.submit)], [DEVELOPER_AGENT]);
+  const agents = createAgents();
+  for (const [name, allowed] of STEERING_TOOL_ACCESS) {
+    assert.ok(tools[name], `plugin registers ${name}`);
+    for (const agent of allowed) {
+      assert.ok(!agents[agent], `Developer is not a registered orchestration agent: ${agent}`);
+    }
+    for (const role of ORCHESTRATION_ROLES) {
+      assert.equal(agents[role].permission[name], "deny", `${role} is denied ${name} statically`);
+      assert.ok(!allowed.has(role), `${role} is absent from the runtime allowlist`);
+    }
+  }
+});
+
+test("maps Developer to an explicit non-flock mode distinct from none", () => {
+  assert.equal(modeForAgent(DEVELOPER_AGENT), "developer");
+  assert.equal(modeForAgent("none"), "none");
+  assert.equal(modeForAgent("unknown"), "none");
+  assert.equal(modeForAgent("ambiguous"), "none");
+  assert.equal(modeForAgent(undefined), "none");
+  assert.notEqual(modeForAgent(DEVELOPER_AGENT), "none");
+});
+
+test("never spawns Developer through any flock spawn matrix", () => {
+  const agents = createAgents();
+  const pattern = `herdr agent start * --kind opencode --pane * -- --agent ${DEVELOPER_AGENT}`;
+  for (const role of ORCHESTRATION_ROLES) {
+    assert.equal(agents[role].permission.bash?.[pattern], undefined, `${role} must not spawn ${DEVELOPER_AGENT}`);
+  }
 });

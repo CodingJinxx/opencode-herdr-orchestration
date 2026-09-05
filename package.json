@@ -37,7 +37,8 @@
     "opencode",
     "herdr",
     "orchestration",
-    "agents"
+    "agents",
+    "steering"
   ],
   "license": "MIT",
   "dependencies": {

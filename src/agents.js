@@ -96,6 +96,37 @@ function stateToolPermissions(allowedTools) {
   );
 }
 
+// Developer steering submission (M2, Option A, trusted Developer only).
+// The explicit non-flock `developer` context is the sole submitter; all
+// seven orchestration roles are denied as defense in depth. The runtime
+// context-agent check in src/index.js stays authoritative over these static
+// entries: even a user override flipping one to "allow" must not bypass the
+// allowlist. No flock role may present as Developer: developer is not a
+// registered orchestration agent and no spawn matrix entry creates it.
+export const DEVELOPER_AGENT = "developer";
+export const ORCHESTRATION_ROLES = Object.freeze([
+  "shepherd",
+  "shepherd-governor",
+  "sheepdog",
+  "grazer",
+  "sheep",
+  "shearer-low",
+  "shearer-medium",
+]);
+export const STEERING_TOOLS = Object.freeze({
+  submit: "herdr_steering_submit",
+});
+export const STEERING_TOOL_ACCESS = Object.freeze(
+  new Map([[STEERING_TOOLS.submit, new Set([DEVELOPER_AGENT])]]),
+);
+const ALL_STEERING_TOOLS = Object.freeze(Object.values(STEERING_TOOLS));
+
+function steeringToolPermissions(allowedTools) {
+  return Object.fromEntries(
+    ALL_STEERING_TOOLS.map((name) => [name, allowedTools.includes(name) ? "allow" : "deny"]),
+  );
+}
+
 const SHEPHERD_STATE_TOOLS = [STATE_TOOLS.planWrite, STATE_TOOLS.planRead];
 const GOVERNOR_STATE_TOOLS = [STATE_TOOLS.planRead];
 const SHEEPDOG_STATE_TOOLS = [
@@ -218,6 +249,7 @@ export function createAgents(options = {}) {
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
         ...stateToolPermissions(SHEPHERD_STATE_TOOLS),
+        ...steeringToolPermissions([]),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -261,6 +293,7 @@ export function createAgents(options = {}) {
         apply_patch: markdownOnly,
         herdr_agent_response: "allow",
         ...stateToolPermissions(GOVERNOR_STATE_TOOLS),
+        ...steeringToolPermissions([]),
         bash: {
           "*": "deny",
           ...herdrInspection,
@@ -326,6 +359,7 @@ export function createAgents(options = {}) {
         apply_patch: "deny",
         herdr_agent_response: "allow",
         ...stateToolPermissions(SHEEPDOG_STATE_TOOLS),
+        ...steeringToolPermissions([]),
         bash: {
           "*": "deny",
           ...safeGitInspection,
@@ -355,6 +389,7 @@ export function createAgents(options = {}) {
         apply_patch: "deny",
         herdr_agent_response: "deny",
         ...stateToolPermissions([]),
+        ...steeringToolPermissions([]),
         bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
         task: "deny",
       },
@@ -371,6 +406,7 @@ export function createAgents(options = {}) {
         grep: "allow",
         herdr_agent_response: "deny",
         ...stateToolPermissions([]),
+        ...steeringToolPermissions([]),
         bash: {
           "*": "allow",
           ...SHEEP_DENIALS,
@@ -410,6 +446,7 @@ function reviewerAgent(model, variant) {
       todowrite: "deny",
       herdr_agent_response: "deny",
       ...stateToolPermissions([]),
+      ...steeringToolPermissions([]),
       bash: { "*": "deny", ...safeGitInspection, ...separatorDenials },
       task: "deny",
     },

@@ -1,12 +1,21 @@
 import { tool } from "@opencode-ai/plugin";
 
-import { createAgents, mergeAgent, STATE_TOOL_ACCESS, STATE_TOOLS } from "./agents.js";
+import {
+  createAgents,
+  DEVELOPER_AGENT,
+  mergeAgent,
+  STATE_TOOL_ACCESS,
+  STATE_TOOLS,
+  STEERING_TOOL_ACCESS,
+  STEERING_TOOLS,
+} from "./agents.js";
 import { createResponseTool } from "./response.js";
 import { createStateService } from "./state.js";
 
 const SESSION_MODES = new Map();
 
 function modeForAgent(agent) {
+  if (agent === DEVELOPER_AGENT) return "developer";
   if (agent === "shepherd") return "shepherd";
   if (agent === "shepherd-governor") return "governor";
   if (agent === "sheepdog") return "sheepdog";
@@ -107,10 +116,58 @@ export function createStateTools(stateOptions = {}) {
   return tools;
 }
 
+// Developer steering submission (M2, Option A, trusted Developer only).
+// The sole submitter is the explicit non-flock `developer` context. The
+// allowlist holds only Developer; every flock role plus unknown, ambiguous,
+// none, and unset are denied fail-closed with no filesystem write. Developer
+// is never inferred from session mode, directory, environment text, or prompt
+// content: only an exact `context.agent === "developer"` passes. The runtime
+// check stays authoritative over static per-agent permission overrides.
+export function createSteeringTools(stateOptions = {}) {
+  const state = createStateService(stateOptions);
+  const name = STEERING_TOOLS.submit;
+  return {
+    [name]: tool({
+      description:
+        "Submit bounded Developer steering for one Plan ID target. Developer context only; flock roles are denied. Provide explicit planId, or omit it only when exactly one active steering target exists.",
+      args: {
+        planId: tool.schema
+          .string()
+          .optional()
+          .describe("Explicit steering target Plan ID; required unless exactly one active target exists."),
+        content: tool.schema
+          .string()
+          .min(1)
+          .describe("Bounded steering content; at most 8192 UTF-8 bytes."),
+      },
+      async execute(args, context) {
+        const allowed = STEERING_TOOL_ACCESS.get(name);
+        if (!allowed?.has(context?.agent)) {
+          return JSON.stringify(
+            stateError(
+              "UNAUTHORIZED_AGENT",
+              `Agent ${context?.agent ?? "unknown"} may not use ${name}.`,
+            ),
+          );
+        }
+        const result = await state.submitSteering(args);
+        context.metadata({
+          title: result.ok ? `${name}: ${result.entry.planId}#${result.entry.sequence}` : `${name}: ${result.error.code}`,
+          metadata: result.ok
+            ? { planId: result.entry.planId, steeringId: result.entry.id, sequence: result.entry.sequence }
+            : { error: result.error.code },
+        });
+        return JSON.stringify(result);
+      },
+    }),
+  };
+}
+
 export const HerdrOrchestrationPlugin = async (_input, options = {}) => ({
   tool: {
     herdr_agent_response: createResponseTool(options.response),
     ...createStateTools(options.state),
+    ...createSteeringTools(options.state),
   },
   config(config) {
     config.agent ??= {};
@@ -139,4 +196,13 @@ export const HerdrOrchestrationPlugin = async (_input, options = {}) => ({
 });
 
 export default HerdrOrchestrationPlugin;
-export { createAgents, mergeAgent, modeForAgent, STATE_TOOL_ACCESS, STATE_TOOLS };
+export {
+  createAgents,
+  DEVELOPER_AGENT,
+  mergeAgent,
+  modeForAgent,
+  STATE_TOOL_ACCESS,
+  STATE_TOOLS,
+  STEERING_TOOL_ACCESS,
+  STEERING_TOOLS,
+};

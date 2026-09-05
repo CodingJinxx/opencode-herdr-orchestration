@@ -7,8 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
-import plugin from "../src/index.js";
-import { STATE_TOOLS } from "../src/agents.js";
+import plugin, { createSteeringTools } from "../src/index.js";
+import { DEVELOPER_AGENT, STATE_TOOLS, STEERING_TOOL_ACCESS, STEERING_TOOLS } from "../src/agents.js";
 import * as packageEntry from "../src/plugin.js";
 
 function realpath(value) {
@@ -347,4 +347,137 @@ test("state tools never issue arbitrary Git metadata writes", async () => {
     ["safe-01.md"],
     "state is durable plain Markdown under the shared common directory",
   );
+});
+
+function steeringRootFor(repo) {
+  return path.join(repo.commonDir, "flocky", "steering");
+}
+
+test("registers exactly one Developer steering submission tool", async () => {
+  const hooks = await plugin({}, { state: { cwd: tmpdir() } });
+  assert.ok(hooks.tool[STEERING_TOOLS.submit], `plugin registers ${STEERING_TOOLS.submit}`);
+  assert.equal(STEERING_TOOLS.submit, "herdr_steering_submit");
+  assert.deepEqual([...STEERING_TOOL_ACCESS.keys()], [STEERING_TOOLS.submit]);
+  assert.deepEqual([...STEERING_TOOL_ACCESS.get(STEERING_TOOLS.submit)], [DEVELOPER_AGENT]);
+});
+
+test("Developer submit succeeds with explicit planId and appends ordered records", async () => {
+  const repo = stateRepository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const execute = (agent, args) =>
+    hooks.tool[STEERING_TOOLS.submit].execute(args, stateContext(agent)).then((output) => JSON.parse(output));
+  const first = await execute("developer", { planId: "dev-plan-01", content: "First Developer directive." });
+  assert.equal(first.ok, true);
+  assert.equal(first.entry.sequence, 1);
+  assert.equal(first.entry.planId, "dev-plan-01");
+  assert.equal(first.entry.provenance.submitter, "developer");
+  const second = await execute("developer", { planId: "dev-plan-01", content: "Second Developer directive." });
+  assert.equal(second.ok, true);
+  assert.equal(second.entry.sequence, 2);
+  assert.notEqual(first.entry.id, second.entry.id);
+});
+
+test("steering submission denies all seven orchestration roles with no filesystem write", async () => {
+  const repo = stateRepository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  for (const agent of [
+    "shepherd",
+    "shepherd-governor",
+    "sheepdog",
+    "grazer",
+    "sheep",
+    "shearer-low",
+    "shearer-medium",
+  ]) {
+    const output = await hooks.tool[STEERING_TOOLS.submit].execute(
+      { planId: "denied-plan", content: "Must not land." },
+      stateContext(agent),
+    );
+    const result = JSON.parse(output);
+    assert.equal(result.ok, false, `${agent} must be denied`);
+    assert.equal(result.error.code, "UNAUTHORIZED_AGENT");
+    assert.equal(result.error.retryable, false);
+  }
+  assert.equal(fs.existsSync(steeringRootFor(repo)), false, "denied submissions write nothing");
+});
+
+test("steering submission denies unknown, ambiguous, none, and unset contexts without inference", async () => {
+  const repo = stateRepository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  for (const agent of ["unknown", "ambiguous", "none", "", null]) {
+    const output = await hooks.tool[STEERING_TOOLS.submit].execute(
+      { planId: "denied-plan", content: "Must not land." },
+      stateContext(agent),
+    );
+    const result = JSON.parse(output);
+    assert.equal(result.ok, false, `agent ${JSON.stringify(agent)} must be denied`);
+    assert.equal(result.error.code, "UNAUTHORIZED_AGENT");
+  }
+  const unset = await hooks.tool[STEERING_TOOLS.submit].execute(
+    { planId: "denied-plan", content: "Must not land." },
+    { agent: undefined, abort: new AbortController().signal, metadata() {} },
+  );
+  assert.equal(JSON.parse(unset).error.code, "UNAUTHORIZED_AGENT");
+  const missing = await hooks.tool[STEERING_TOOLS.submit].execute(
+    { planId: "denied-plan", content: "Must not land." },
+    { abort: new AbortController().signal, metadata() {} },
+  );
+  assert.equal(JSON.parse(missing).error.code, "UNAUTHORIZED_AGENT");
+  assert.equal(fs.existsSync(steeringRootFor(repo)), false, "denied contexts write nothing");
+});
+
+test("steering runtime check stays authoritative over static permission overrides", async () => {
+  const repo = stateRepository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const config = {};
+  hooks.config(config);
+  // Simulate a user override that flips a flock role to allow: the runtime
+  // allowlist must still deny.
+  config.agent.sheepdog.permission[STEERING_TOOLS.submit] = "allow";
+  const denied = await hooks.tool[STEERING_TOOLS.submit].execute(
+    { planId: "override-plan", content: "Must still be denied." },
+    stateContext("sheepdog"),
+  );
+  assert.equal(JSON.parse(denied).error.code, "UNAUTHORIZED_AGENT");
+  assert.equal(fs.existsSync(steeringRootFor(repo)), false);
+  const allowed = await hooks.tool[STEERING_TOOLS.submit].execute(
+    { planId: "override-plan", content: "Developer still passes." },
+    stateContext("developer"),
+  );
+  assert.equal(JSON.parse(allowed).ok, true);
+});
+
+test("steering submission requires explicit target when ambiguous and performs concurrent Developer submits", async () => {
+  const repo = stateRepository();
+  const hooks = await plugin({}, { state: { cwd: repo.cwd } });
+  const execute = (agent, args) =>
+    hooks.tool[STEERING_TOOLS.submit].execute(args, stateContext(agent)).then((output) => JSON.parse(output));
+  await execute("developer", { planId: "amber-a", content: "Seed A." });
+  await execute("developer", { planId: "amber-b", content: "Seed B." });
+  const ambiguous = await execute("developer", { content: "No explicit target with two actives." });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.error.code, "AMBIGUOUS_TARGET");
+  assert.equal(ambiguous.error.retryable, false);
+
+  const concurrent = await Promise.all(
+    ["C1.", "C2.", "C3."].map((content) => execute("developer", { planId: "amber-a", content })),
+  );
+  for (const result of concurrent) assert.equal(result.ok, true);
+  const sequences = concurrent.map((result) => result.entry.sequence).sort((a, b) => a - b);
+  assert.deepEqual(sequences, [2, 3, 4]);
+});
+
+test("steering exposes no herdr steer CLI and no package CLI steering command", async () => {
+  const binText = fs.readFileSync(new URL("../bin/orchestration.js", import.meta.url), "utf8");
+  assert.doesNotMatch(binText, /herdr\s+steer/i, "bin CLI must not implement herdr steer");
+  assert.doesNotMatch(binText, /["']steer["']/i, "bin CLI must not implement a steer command");
+  const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(packageJson.bin ?? {}), ["opencode-herdr-orchestration"]);
+  for (const script of Object.values(packageJson.scripts ?? {})) {
+    assert.doesNotMatch(String(script), /herdr\s+steer/i, "package scripts must not invoke herdr steer");
+  }
+  assert.ok(!Object.keys(packageJson.bin ?? {}).some((name) => /steer/i.test(name)), "package bin must not advertise a steering CLI");
+  const hooks = await plugin({}, { state: { cwd: tmpdir() } });
+  const names = Object.keys(hooks.tool);
+  assert.ok(!names.some((name) => name !== STEERING_TOOLS.submit && /steer/i.test(name)), "exactly one steering tool is registered");
 });
