@@ -374,3 +374,23 @@ test("returns a specific error when a session export exceeds the configured limi
   assert.equal(result.error.code, "SESSION_EXPORT_TOO_LARGE");
   assert.equal(result.error.retryable, false);
 });
+
+test("21-M1 sheepdog retrieves each owned role and denies the governor", async () => {
+  for (const role of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const fixture = exported([user("u1"), assistant({ id: "final", parentID: "u1", text: `${role} done`, role })], role);
+    const retrieve = createResponseService({ run: runner(() => fixture), secret: Buffer.alloc(32, 11) });
+    const result = await retrieve({ target: "worker_1" }, contextFor("sheepdog"));
+    assert.equal(result.ok, true, `sheepdog must retrieve ${role}`);
+    assert.equal(result.text, `${role} done`);
+  }
+  const governorFixture = exported(
+    [user("u1"), assistant({ id: "final", parentID: "u1", text: "gov done", role: "shepherd-governor" })],
+    "shepherd-governor",
+  );
+  const dogBlocked = createResponseService({ run: runner(() => governorFixture), secret: Buffer.alloc(32, 11) });
+  assert.equal(
+    (await dogBlocked({ target: "worker_1" }, contextFor("sheepdog"))).error.code,
+    "UNSUPPORTED_WORKER_ROLE",
+    "sheepdog must not retrieve the governor",
+  );
+});

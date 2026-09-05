@@ -391,6 +391,26 @@ Machine-specific governance permissions and instructions can also be added decla
 
 `shepherdPermissions` is merged over the planning `shepherd` agent's permissions. `shepherdPromptAppend` is appended as a separate final paragraph to the `shepherd` agent's prompt. Keep secrets out of plugin options because configuration may be displayed by diagnostics.
 
+Sheepdog squad-local options use the same scoped pattern and affect only `sheepdog`:
+
+```jsonc
+{
+  "plugin": [
+    [
+      "opencode-herdr-orchestration",
+      {
+        "sheepdogPermissions": {
+          "private_squad_status": "allow"
+        },
+        "sheepdogPromptAppend": "Use private squad tools according to local policy."
+      }
+    ]
+  ]
+}
+```
+
+`sheepdogPermissions` is merged over the `sheepdog` agent's permissions only; it never touches `shepherd`, `shepherd-governor`, or leaves, so local config cannot silently broaden another role or replace its lifecycle allows. `sheepdogPromptAppend` is appended as a separate final paragraph to the `sheepdog` prompt. Sheepdog lifecycle stays evaluation-effective by explicit ordering: `*` deny first, `herdr agent prompt` plus `wait` plus `get` plus `read` allows in the middle, Git lifecycle allows plus Ctrl-C-only `send-keys` plus delivery denials next, separator denies (`*;*`, `*&&*`, `*||*`, `*|*`, `*>*`, `*<*`) global last. A prompt whose task text carries raw separators fails closed to deny even inside quotes; construct task text content-safe by quoting identifiers and splitting or rephrasing delivery instead of embedding separators.
+
 Machine- or organization-specific MCP tools, deployment rules, and private service instructions should stay in a local governance-agent override rather than this public package. Add only the private permissions and prompt additions required by your environment; unspecified package defaults remain intact through deep merging.
 
 OpenCode loads plugins and agent definitions at startup. Restart OpenCode when intentionally enabling or updating the plugin. The installer never stops or restarts an OpenCode process.
@@ -435,9 +455,9 @@ node .\bin\orchestration.js uninstall-hooks
 
 ## Worker interruption
 
-Herdr currently exposes `send-keys`, not a narrower agent interrupt command. Shepherd-phase agents retain it to send Ctrl+C only after confirming that a worker is genuinely stuck. Prompts prohibit using worker terminals to type implementation commands or bypass shepherd permissions.
+Herdr currently exposes `send-keys`, not a narrower agent interrupt command. Shepherd-phase agents retain it to send Ctrl+C only after confirming that a worker is genuinely stuck. Prompts prohibit using worker terminals to type implementation commands or bypass shepherd permissions. Sheepdog is further scoped to Ctrl-C-only replacement semantics as far as Bash matchers permit: the broad `herdr agent send-keys*` allow is replaced by an explicit deny plus narrow `C-c` and `ctrl+c` `--keys` spellings, with separator denies still global last and inspect-first plus never-type plus never-bypass staying primary in `SHEEPDOG_PROMPT`.
 
-This restriction is not hard-enforced by Herdr. A native `herdr agent interrupt <target>` command would close that capability gap.
+This restriction is not hard-enforced by Herdr. Matchers are string globs and cannot prove semantic intent or enumerate every Herdr spelling, so a crafted `send-keys` that matches a narrow Ctrl-C glob but carries extra intent remains possible; a native `herdr agent interrupt <target>` command would close that capability gap.
 
 ## Developer steering
 
@@ -598,7 +618,7 @@ For stronger release control, configure required reviewers on the `npm` environm
 ## Known limitations
 
 - OpenCode command patterns cannot prove semantic Git intent; the hook adds checks but server-side protection is still required.
-- `herdr agent send-keys` is broader than interrupt-only authority.
+- `herdr agent send-keys` is broader than interrupt-only authority; sheepdog narrows it to Ctrl-C-only spellings as far as matchers permit, but matchers cannot prove intent and the prompt inspect-first rule stays primary.
 - Global `core.hooksPath` is singular. Existing hook frameworks must be composed rather than overwritten.
 - PR commands are narrowly available to the governance phase, but work only in GitHub repositories with an authenticated `gh` installation.
 - Agent registration and environment hooks take effect only in newly started OpenCode processes.

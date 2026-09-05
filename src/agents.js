@@ -195,6 +195,39 @@ const SHEEPDOG_LIFECYCLE_ALLOWS = {
   "git commit*": "allow",
 };
 
+// Sheepdog Herdr lifecycle (21-M1): explicit prompt plus wait plus get plus
+// read allows. These re-assert the shared herdrInspection entries so the four
+// lifecycle operations stay evaluation-effective under OpenCode last-match
+// glob semantics: "*" deny is the fallback first, these allows sit in the
+// middle, separator denies stay global last. A prompt whose task text carries
+// raw "; && || | > <" matches a separator deny after the prompt allow and
+// fails closed to deny even inside quotes, so task text must avoid raw
+// separators (see SHEEPDOG_PROMPT safe rule).
+const SHEEPDOG_HERDR_LIFECYCLE_ALLOWS = {
+  "herdr agent prompt*": "allow",
+  "herdr agent wait*": "allow",
+  "herdr agent get*": "allow",
+  "herdr agent read*": "allow",
+};
+
+// Sheepdog interrupt bound (21-M1): replacement for the broad
+// "herdr agent send-keys*" allow in shared herdrInspection. The broad pattern
+// is explicitly denied first so only the narrow Ctrl-C spellings below are
+// evaluation-effective. Matchers are string globs and cannot prove semantic
+// intent, so the prompt inspect-first plus never-type rule stays primary; see
+// SHEEPDOG_PROMPT and README Worker interruption residual.
+const SHEEPDOG_SEND_KEYS_DENY = {
+  "herdr agent send-keys*": "deny",
+};
+const SHEEPDOG_SEND_KEYS_CTRL_C_ALLOWS = {
+  "herdr agent send-keys * --keys C-c*": "allow",
+  "herdr agent send-keys * --keys c-c*": "allow",
+  "herdr agent send-keys * --keys ctrl+c*": "allow",
+  "herdr agent send-keys * --keys Ctrl+C*": "allow",
+  "herdr agent send-keys * C-c*": "allow",
+  "herdr agent send-keys * ctrl+c*": "allow",
+};
+
 const SHEEPDOG_DENIALS = {
   "git push*": "deny",
   "git pull*": "deny",
@@ -275,7 +308,9 @@ export function createAgents(options = {}) {
   const sheepdogVariant = options.sheepdogVariant;
   const reviewerModel = options.reviewerModel ?? "litellm-responses/gpt-5.6-terra";
   const shepherdPermissions = options.shepherdPermissions ?? {};
-  const shepherdPrompt = appendPrompt(SHEPHERD_PROMPT, options.shepherdPromptAppend);
+  const shepherdPrompt = appendPrompt(SHEPHERD_PROMPT, options.shepherdPromptAppend, "shepherdPromptAppend");
+  const sheepdogPermissions = options.sheepdogPermissions ?? {};
+  const sheepdogPrompt = appendPrompt(SHEEPDOG_PROMPT, options.sheepdogPromptAppend, "sheepdogPromptAppend");
 
   return {
     shepherd: {
@@ -394,7 +429,7 @@ export function createAgents(options = {}) {
       ...(sheepdogVariant ? { variant: sheepdogVariant } : {}),
       description:
         "Leads execution squads of grazer, sheep, and shearers, prepares worker branches and worktrees, owns validation, review tiers, retries, and conflict recovery, and performs clean local integration with merge and cherry-pick lifecycle commands only.",
-      prompt: SHEEPDOG_PROMPT,
+      prompt: sheepdogPrompt,
       permission: {
         read: "allow",
         glob: "allow",
@@ -413,11 +448,15 @@ export function createAgents(options = {}) {
           ...safeGitInspection,
           ...herdrInspection,
           ...spawnMatrix(SHEEPDOG_SPAWNABLE_AGENTS),
+          ...SHEEPDOG_HERDR_LIFECYCLE_ALLOWS,
           ...SHEEPDOG_LIFECYCLE_ALLOWS,
           ...SHEEPDOG_DENIALS,
+          ...SHEEPDOG_SEND_KEYS_DENY,
+          ...SHEEPDOG_SEND_KEYS_CTRL_C_ALLOWS,
           ...separatorDenials,
         },
         task: "deny",
+        ...sheepdogPermissions,
       },
     },
 
@@ -473,10 +512,10 @@ export function createAgents(options = {}) {
   };
 }
 
-function appendPrompt(prompt, addition) {
+function appendPrompt(prompt, addition, optionName = "shepherdPromptAppend") {
   if (addition === undefined || addition === "") return prompt;
   if (typeof addition !== "string") {
-    throw new TypeError("shepherdPromptAppend must be a string.");
+    throw new TypeError(`${optionName} must be a string.`);
   }
   return `${prompt.trimEnd()}\n\n${addition.trim()}`;
 }

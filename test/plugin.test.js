@@ -620,3 +620,24 @@ test("M3 M2 regression via tools: developer submit still sole submitter", async 
     assert.equal((await submit(agent, { planId: "m3-tool-regress", content: "Denied." })).error.code, "UNAUTHORIZED_AGENT");
   }
 });
+
+test("21-M1 sheepdog scoped tuple applies only to sheepdog with lifecycle retained", async () => {
+  const hooks = await plugin({}, {
+    sheepdogPermissions: { private_squad_status: "allow" },
+    sheepdogPromptAppend: "Use private squad tools according to local policy.",
+  });
+  const config = {};
+  hooks.config(config);
+  assert.equal(config.agent.sheepdog.permission.private_squad_status, "allow");
+  assert.match(config.agent.sheepdog.prompt, /Use private squad tools according to local policy\.$/);
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent prompt*"], "allow");
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent wait*"], "allow");
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent get*"], "allow");
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent read*"], "allow");
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent send-keys*"], "deny");
+  assert.equal(config.agent.sheepdog.permission.bash["herdr agent send-keys * --keys C-c*"], "allow");
+  for (const name of ["shepherd", "shepherd-governor", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal("private_squad_status" in config.agent[name].permission, false, `sheepdog tuple must not leak to ${name}`);
+    assert.doesNotMatch(config.agent[name].prompt, /private squad tools/);
+  }
+});

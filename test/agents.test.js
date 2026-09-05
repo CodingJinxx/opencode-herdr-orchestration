@@ -549,3 +549,152 @@ test("M3 prompts own raw steering for shepherd phases and deny it for workers", 
   assert.match(GRAZER_PROMPT, /not yours/);
   assert.match(SHEEP_PROMPT, /not yours/);
 });
+
+// --- 21-M1 sheepdog lifecycle (reprompt) ------------------------------------
+
+function m1GlobToRegExp(pattern) {
+  let out = "^";
+  for (const c of pattern) {
+    if (c === "*") out += ".*";
+    else if ("+?^${}()|[]\\.".includes(c)) out += `\\${c}`;
+    else out += c;
+  }
+  return new RegExp(`${out}$`);
+}
+
+function m1EvaluateBash(bash, command) {
+  let result;
+  for (const [pattern, decision] of Object.entries(bash)) {
+    if (m1GlobToRegExp(pattern).test(command)) result = decision;
+  }
+  return result ?? "undefined";
+}
+
+test("21-M1 sheepdog start plus prompt plus re-prompt plus wait plus get plus read for each owned role", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  for (const key of ["herdr agent prompt*", "herdr agent wait*", "herdr agent get*", "herdr agent read*"]) {
+    assert.equal(bash[key], "allow", `${key} must stay evaluation-effective for sheepdog`);
+  }
+  const keys = Object.keys(bash);
+  const star = keys.indexOf("*");
+  const promptIdx = keys.indexOf("herdr agent prompt*");
+  const waitIdx = keys.indexOf("herdr agent wait*");
+  const getIdx = keys.indexOf("herdr agent get*");
+  const readIdx = keys.indexOf("herdr agent read*");
+  const sepIdx = keys.indexOf("*;*");
+  assert.ok(star !== -1 && promptIdx > star, "* deny stays fallback first with lifecycle allows after it");
+  for (const idx of [waitIdx, getIdx, readIdx]) assert.ok(idx > star, "wait/get/read allow after * deny");
+  assert.ok(sepIdx > promptIdx && sepIdx > waitIdx && sepIdx > getIdx && sepIdx > readIdx, "separator denies stay global last");
+  assert.equal(bash["*"], "deny");
+
+  for (const role of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal(bash[spawnPattern(role)], "allow", `sheepdog must start ${role}`);
+    const start = `herdr agent start ${role}_1 --kind opencode --pane pane1 -- --agent ${role}`;
+    assert.equal(m1EvaluateBash(bash, start), "allow", `start evaluates allow for ${role}`);
+    const prompt = `herdr agent prompt ${role}_1 hello --wait --timeout 1000`;
+    assert.equal(m1EvaluateBash(bash, prompt), "allow", `prompt evaluates allow for ${role}`);
+    const reprompt = `herdr agent prompt ${role}_1 corrected bounded text --wait --timeout 1000`;
+    assert.equal(m1EvaluateBash(bash, reprompt), "allow", `re-prompt same worker evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent wait ${role}_1 --timeout 1000`), "allow", `wait evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent get ${role}_1`), "allow", `get evaluates allow for ${role}`);
+    assert.equal(m1EvaluateBash(bash, `herdr agent read ${role}_1`), "allow", `read evaluates allow for ${role}`);
+  }
+  assert.equal(createAgents().sheepdog.permission.herdr_agent_response, "allow", "sheepdog retrieves via herdr_agent_response");
+});
+
+test("21-M1 sheepdog separator content safety fails closed with safe prompt rule", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  const clean = 'herdr agent prompt sheep_1 bounded task without separators --wait --timeout 1000';
+  assert.equal(m1EvaluateBash(bash, clean), "allow", "clean prompt stays allow");
+  for (const cmd of [
+    'herdr agent prompt sheep_1 "fix; do X" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a && b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a || b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a | b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a > b" --wait --timeout 1000',
+    'herdr agent prompt sheep_1 "a < b" --wait --timeout 1000',
+  ]) {
+    assert.equal(m1EvaluateBash(bash, cmd), "deny", `separator task text must fail closed: ${cmd}`);
+  }
+  assert.match(SHEEPDOG_PROMPT, /content-safe/);
+  assert.match(SHEEPDOG_PROMPT, /never carry raw separator/);
+  assert.match(SHEEPDOG_PROMPT, /fails closed/);
+  assert.match(SHEEPDOG_PROMPT, /split or rephrase/);
+  assert.match(SHEEPDOG_PROMPT, /re-prompt the same worker/);
+  assert.match(SHEEPDOG_PROMPT, /herdr agent wait/);
+  assert.match(SHEEPDOG_PROMPT, /herdr agent get plus herdr agent read/);
+});
+
+test("21-M1 sheepdog Ctrl-C-only send-keys replacement with honest residual", () => {
+  const bash = createAgents().sheepdog.permission.bash;
+  assert.equal(bash["herdr agent send-keys*"], "deny", "broad send-keys must be denied for sheepdog");
+  for (const key of [
+    "herdr agent send-keys * --keys C-c*",
+    "herdr agent send-keys * --keys ctrl+c*",
+    "herdr agent send-keys * C-c*",
+  ]) {
+    assert.equal(bash[key], "allow", `${key} must allow Ctrl-C interrupt`);
+  }
+  const keys = Object.keys(bash);
+  assert.ok(keys.indexOf("herdr agent send-keys*") > keys.indexOf("*"), "send-keys deny after * fallback");
+  assert.ok(keys.indexOf("herdr agent send-keys * --keys C-c*") > keys.indexOf("herdr agent send-keys*"), "narrow Ctrl-C after broad deny");
+  assert.ok(keys.indexOf("*;*") > keys.indexOf("herdr agent send-keys * --keys C-c*"), "separator denies stay global last after Ctrl-C allows");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys C-c"), "allow");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys ctrl+c"), "allow");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 ls"), "deny", "arbitrary typing stays denied");
+  assert.equal(m1EvaluateBash(bash, "herdr agent send-keys worker_1 --keys C-c; rm"), "deny", "separator smuggling stays denied");
+  assert.match(SHEEPDOG_PROMPT, /Use send-keys only to interrupt a genuinely stuck worker with Ctrl\+C after inspection/);
+  assert.match(SHEEPDOG_PROMPT, /Never type implementation commands/);
+  assert.match(SHEEPDOG_PROMPT, /never-bypass/);
+  assert.match(SHEEPDOG_PROMPT, /cannot prove intent/);
+  assert.match(SHEEPDOG_PROMPT, /stays primary/);
+});
+
+test("21-M1 sheepdog REWORK same-sheep routing plus re-review independence plus direct denial", () => {
+  assert.match(SHEEPDOG_PROMPT, /REWORK returns concrete findings to the responsible sheep for correction and re-review/);
+  assert.match(SHEEPDOG_PROMPT, /Give each shearer fresh bounded context/);
+  assert.match(SHEEPDOG_PROMPT, /not the worker conversation/);
+  assert.match(SHEEPDOG_PROMPT, /After two failed semantic review cycles/);
+  assert.match(SHEEPDOG_PROMPT, /escalate to shepherd-governor/);
+  const agent = createAgents().sheepdog;
+  assert.equal(agent.permission.edit, "deny", "sheepdog never implements directly");
+  assert.equal(agent.permission.apply_patch, "deny");
+  assert.match(SHEEPDOG_PROMPT, /You must not edit files, apply patches, hand-resolve conflicts/);
+  assert.match(SHEEPDOG_PROMPT, /Never hand-edit a conflicted file/);
+  assert.match(SHEEPDOG_PROMPT, /never leave a merge or cherry-pick in progress/);
+  const bash = agent.permission.bash;
+  for (const denied of ["git push*", "git pull*", "git fetch*", "git remote*", "git rebase*", "git reset*", "git checkout*", "git switch*", "git worktree*", "herdr worktree remove * --force*"]) {
+    assert.equal(bash[denied], "deny", `${denied} retained as deny for sheepdog`);
+  }
+  assert.equal(m1EvaluateBash(bash, "git push origin HEAD"), "deny", "push stays denied");
+  for (const role of ["sheepdog", "shepherd", "shepherd-governor"]) {
+    assert.equal(bash[spawnPattern(role)], undefined, `sheepdog must not spawn ${role}`);
+  }
+  assert.equal(m1EvaluateBash(bash, "herdr agent start dog2 --kind opencode --pane p1 -- --agent sheepdog"), "deny", "sheepdog spawns sheepdog fails closed");
+});
+
+test("21-M1 sheepdog scoped override guard stays scoped and shadows fail closed", () => {
+  const agents = createAgents({
+    sheepdogPermissions: { private_squad_status: "allow" },
+    sheepdogPromptAppend: "Use private squad tools according to local policy.",
+  });
+  assert.equal(agents.sheepdog.permission.private_squad_status, "allow");
+  assert.match(agents.sheepdog.prompt, /Use private squad tools according to local policy\.$/);
+  for (const name of ["shepherd", "shepherd-governor", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal("private_squad_status" in agents[name].permission, false, `sheepdog tuple must not leak to ${name}`);
+    assert.doesNotMatch(agents[name].prompt, /private squad tools/);
+  }
+  const shepherdScoped = createAgents({
+    shepherdPermissions: { private_deployment_status: "allow" },
+    shepherdPromptAppend: "Shepherd private note.",
+  });
+  assert.equal("private_deployment_status" in shepherdScoped.sheepdog.permission, false, "shepherd tuple must not leak to sheepdog");
+  assert.doesNotMatch(shepherdScoped.sheepdog.prompt, /Shepherd private note/);
+  assert.equal(shepherdScoped.sheepdog.permission.bash["herdr agent prompt*"], "allow", "shepherd tuple preserves sheepdog lifecycle");
+
+  const shadowed = mergeAgent(createAgents().sheepdog, { permission: { bash: { "herdr agent prompt*": "deny" } } });
+  assert.equal(shadowed.permission.bash["herdr agent prompt*"], "deny", "local shadowing flips the static entry");
+  assert.equal(m1EvaluateBash(shadowed.permission.bash, "herdr agent prompt sheep_1 hello --wait --timeout 1000"), "deny", "shadowed lifecycle fails closed to deny");
+  assert.throws(() => createAgents({ sheepdogPromptAppend: 42 }), /sheepdogPromptAppend must be a string/);
+  assert.throws(() => createAgents({ shepherdPromptAppend: 42 }), /shepherdPromptAppend must be a string/);
+});
