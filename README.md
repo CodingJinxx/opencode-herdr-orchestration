@@ -693,6 +693,34 @@ npx -y opencode-herdr-orchestration@latest status
 
 The updater locates the global OpenCode config directory, installs the exact version, preserves JSONC comments and tuple options, creates timestamped backups of changed config and npm manifest files, validates every agent role through a short-lived OpenCode debug process, and never restarts a running OpenCode process. On validation failure it restores the previous config and reports the error. After installation quit and restart OpenCode intentionally; agent and plugin configuration loads only at startup. Before updating to the current package, archive or remove stale standalone agent files after dependent processes have ended (`shepherd-plan.md`, `shepherd-build.md`, `sheep-plan.md`, `sheep-build.md`, `shearer-review-low.md`, `shearer-review-medium.md`, plus misspelled `sheperd-plan.md` and `sheperd-build.md`); a leftover file with a colliding name silently overrides package fields. The installer reports package-owned deletions versus unowned or modified files that require manual review, and `status` reports installed versus latest versions, configured agents, and obsolete files. The shared Git push policy stays opt-in via `install --with-hooks` or `install-hooks`, which refuses to replace an existing global `core.hooksPath` without `--force`. Add repository-specific protected branches with `git config --add orchestration.protectedBranch <name>`; `main` and `master` are always protected in governance mode.
 
+## Troubleshooting
+
+Live-verified on `herdr 0.8.2` plus `opencode 1.18.29` plus package `0.2.1` with `stable` Herdr channel and `opencode: current (v10)` integration. Every command below was executed before printing; live evidence wins over memory. For full procedures see [Installation](#installation), [Manual Installation](#manual-installation), [Upgrade](#upgrade), and [Recovery](#recovery) instead of duplicating them here.
+
+### Missing Herdr OpenCode integration
+
+**Symptom:** `opencode agent list` misses one or more of `shepherd`, `shepherd-governor`, `sheepdog`, `grazer`, `sheep`, `shearer-low`, `shearer-medium`, or `herdr integration status` shows `opencode: not installed` instead of the healthy `opencode: current (v10)`.
+
+**Cause:** The Herdr OpenCode integration is not installed, or OpenCode started before the plugin was configured. Agent and plugin configuration loads only at startup and the installer never restarts a running process (see [Upgrade](#upgrade)).
+
+**Check:** Run the read-only checks and compare with the healthy outputs observed live. `herdr integration status` shows `opencode: current (v10)`. `opencode agent list` lists all seven roles with `(primary)`. `opencode debug agent shepherd` returns JSON with `"name": "shepherd"`. `node bin/orchestration.js status` reports all seven `detectedAgents` with `"agentsReady": true` plus matching `installedVersion` and `latestVersion` of `0.2.1` with `"updateAvailable": false`. On Windows PowerShell the `herdr` launcher resolves per `(Get-Command herdr).Source` to the Herdr `bin` exe verified as `herdr 0.8.2` via `herdr --version`. `herdr --help` lists `herdr integration <subcommand>` and `herdr integration install --help` lists `opencode` as a valid target.
+
+**Fix:** Follow [Installation](#installation) or [Upgrade](#upgrade) for the install plus update path, then quit and restart OpenCode intentionally when ready. Existing processes keep their already-loaded configuration. Do not hand-edit the global config while a dependent OpenCode process is running.
+
+**Verify:** Repeat the check commands until `herdr integration status` shows `opencode: current (v10)`, `opencode agent list` shows all seven roles, `opencode debug agent shepherd` resolves `shepherd`, and `node bin/orchestration.js status` shows `"agentsReady": true`. If the integration stays missing, re-read [Installation](#installation) plus [Upgrade](#upgrade) instead of inventing new install spellings.
+
+### Windows exe versus shim launcher resolution
+
+**Symptom:** `opencode --version` reports an unexpected version or `node bin/orchestration.js status` misses agents even though the config looks correct.
+
+**Cause:** On Windows PowerShell `opencode` may resolve to the direct exe (`node_modules/opencode-ai/bin/opencode.exe`) or to a shim (`opencode.cmd`, `opencode.ps1`, `opencode.exe` in the npm prefix) depending on `PATH` order. `PATH` here means the session `PATH` inspected read-only with `$env:PATH`. File-version text is not authoritative next to CLI `opencode --version` output `1.18.29`.
+
+**Check:** Inspect the resolver without changing it. `(Get-Command opencode).Source` shows the winning launcher. `(Get-Command opencode -All).Source` lists every candidate in order. `(Get-Command herdr).Source` plus `(Get-Command herdr -All).Source` confirms Herdr resolves to a single `bin` exe with no shim confusion. Compare `opencode --version` against the full-path exe and shim forms; healthy hosts report the same `1.18.29` from each. Inspect order read-only with `$env:PATH`. This package never overwrites the global environment. Config resolution only reads the environment in `src/installer.js:40` (`configDirectory`) and validation runs isolated with `OPENCODE_DISABLE_PROJECT_CONFIG` in `src/installer.js:529` (`validateOpenCode`), with status reporting in `src/installer.js:552` (`status`). Autoupdate context is `npm view opencode-herdr-orchestration version` reporting `0.2.1` matching `node bin/orchestration.js status` plus `herdr channel show` reporting `stable` plus `herdr update --help` describing the handoff option.
+
+**Fix:** Use the winning full exe path directly for the current session and restart the terminal plus OpenCode intentionally when ready, then follow [Upgrade](#upgrade) for the package update path. Keep any `PATH` reorder session-local through the current terminal session only. Do not overwrite the machine or user environment. This package never sets global environment values and never asks the operator to do so.
+
+**Verify:** Repeat `opencode --version` through the resolved launcher until it reports `1.18.29` with exe and shim forms agreeing, `opencode debug agent shepherd` returns `"name": "shepherd"`, and `node bin/orchestration.js status` shows `"agentsReady": true`. A launcher problem shows a `Source` mismatch or stale version while a permission problem shows the correct `Source` plus `opencode --version` `1.18.29` but `status` still reports missing agents or `"agentsReady": false`, which routes to [Installation](#installation) plus [Upgrade](#upgrade) plus [Recovery](#recovery) instead of launcher reordering.
+
 ## Recovery
 
 All mutations are atomic and replayable; interruption leaves at most inert temps or a journal that the next call replays idempotently. Operator rule: retry `STEERING_BUSY` and `OWNERSHIP_BUSY` (both `retryable: true`); never hand-delete a live lock, journal, checkpoint, or guard.
