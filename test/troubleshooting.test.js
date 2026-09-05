@@ -54,6 +54,9 @@ test("19-M1 Troubleshooting pins live versions verbatim", () => {
   assert.match(section, /1\.18\.29/);
   assert.match(section, /opencode: current \(v10\)/);
   assert.match(section, /opencode: not installed/);
+  assert.match(section, /%1 is not a valid Win32 application/);
+  assert.match(section, /Start-Process/);
+  assert.match(section, /-ArgumentList --version -NoNewWindow -Wait/);
   assert.match(section, /\(Get-Command herdr\)\.Source/);
   assert.match(section, /\(Get-Command opencode\)\.Source/);
   assert.match(section, /\(Get-Command opencode -All\)\.Source/);
@@ -63,8 +66,12 @@ test("19-M1 Troubleshooting pins live versions verbatim", () => {
   assert.match(section, /opencode debug agent shepherd/);
   assert.match(section, /node bin\/orchestration\.js status/);
   assert.match(section, /npm view opencode-herdr-orchestration version/);
+  assert.match(section, /npm view opencode-ai version/);
   assert.match(section, /herdr channel show/);
   assert.match(section, /herdr update --help/);
+  assert.match(section, /herdr status/);
+  assert.match(section, /status: running/);
+  assert.match(section, /opencode upgrade --help/);
   assert.match(section, /herdr integration status/);
   assert.match(section, /herdr integration install --help/);
 });
@@ -104,7 +111,7 @@ test("19-M1 Troubleshooting links without duplicating full procedures", () => {
   assert.match(section, /instead of launcher reordering/);
 });
 
-test("19-M1 Troubleshooting carries no global env overwriting instructions", () => {
+test("19-M1 Troubleshooting carries no package automatic global writes with durable plus session-local split", () => {
   const section = troubleshootingSection();
   assert.doesNotMatch(section, /setx/i);
   assert.doesNotMatch(section, /SetEnvironmentVariable/);
@@ -112,5 +119,21 @@ test("19-M1 Troubleshooting carries no global env overwriting instructions", () 
   assert.doesNotMatch(section, /export PATH/);
   assert.match(section, /never overwrites the global environment/);
   assert.match(section, /never sets global environment values/);
-  assert.match(section, /session-local/);
+  assert.match(section, /never reorders global state automatically/);
+  assert.match(section, /operator-chosen/);
+  assert.match(section, /not a package write/);
+  assert.match(section, /session-local/i);
+  assert.match(section, /persistent user-chosen/);
+  assert.match(section, /restart Herdr/);
+  assert.match(section, /Session-local changes alone never fix Herdr spawns/);
+  assert.match(section, /panes inherit the Herdr server environment/);
+});
+
+test("19-M1 Troubleshooting documents shim flapping from global opencode updates", () => {
+  const section = troubleshootingSection();
+  assert.match(section, /recreates the npm shims/);
+  assert.match(section, /reappearing shim/);
+  assert.match(section, /bumped/);
+  assert.match(section, /npm view opencode-ai version/);
+  assert.match(section, /opencode upgrade/);
 });
