@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { tmpdir } from "node:os";
 
 import {
@@ -768,4 +769,124 @@ test("20-M1 Sheepdog owns routine flock handling with unknown inconclusive prese
     assert.doesNotMatch(prompt, /herdr agent events/, "no stream invented in prompts");
     assert.doesNotMatch(prompt, /herdr agent logs/, "no log stream invented in prompts");
   }
+});
+
+// --- 14-18-M1 pane layout (single policy plus permission enablement) --------
+
+test("14-18-M1 pane layout matrices per ownership role with leaves unchanged", () => {
+  const agents = createAgents();
+  const shepherdBash = agents.shepherd.permission.bash;
+  const governorBash = agents["shepherd-governor"].permission.bash;
+  const sheepdogBash = agents.sheepdog.permission.bash;
+
+  for (const [name, bash] of [["shepherd", shepherdBash], ["shepherd-governor", governorBash]]) {
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+      assert.equal(bash[key], "allow", `${name} must allow ${key} for single Sheepdog pane`);
+    }
+    assert.equal(bash["herdr pane close*"], undefined, `${name} must not close (single pane, no flock cleanup)`);
+  }
+
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(sheepdogBash[key], "allow", `sheepdog must allow ${key} for flock panes`);
+  }
+
+  for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const bash = agents[name].permission.bash;
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+      assert.equal(bash[key], undefined, `${name} must gain no pane layout allow for ${key}`);
+    }
+  }
+  assert.equal(agents.sheep.permission.bash["herdr*"], "deny", "sheep keeps broad Herdr denial");
+  assert.equal(agents.sheep.permission.bash["*"], "allow", "sheep keeps allow fallback with denials");
+  for (const name of ["grazer", "shearer-low", "shearer-medium"]) {
+    assert.equal(agents[name].permission.bash["*"], "deny", `${name} keeps deny fallback`);
+  }
+});
+
+test("14-18-M1 pane layout evaluation stays effective with separators global last", () => {
+  const shepherdBash = createAgents().shepherd.permission.bash;
+  const governorBash = createAgents()["shepherd-governor"].permission.bash;
+  const sheepdogBash = createAgents().sheepdog.permission.bash;
+  for (const [name, bash] of [["shepherd", shepherdBash], ["shepherd-governor", governorBash], ["sheepdog", sheepdogBash]]) {
+    const keys = Object.keys(bash);
+    const star = keys.indexOf("*");
+    const tabList = keys.indexOf("herdr tab list*");
+    const paneGet = keys.indexOf("herdr pane get*");
+    const paneRename = keys.indexOf("herdr pane rename*");
+    const agentRename = keys.indexOf("herdr agent rename*");
+    const sep = keys.indexOf("*;*");
+    assert.ok(star !== -1 && tabList > star, `${name} tab list allow after * deny`);
+    for (const idx of [paneGet, paneRename, agentRename]) assert.ok(idx > star, `${name} pane rename/get allow after * deny`);
+    assert.ok(sep > tabList && sep > paneGet && sep > paneRename && sep > agentRename, `${name} separator denies stay global last`);
+    assert.equal(m1EvaluateBash(bash, "herdr tab list --workspace w1K"), "allow", `${name} tab list evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr pane get w1K:p1"), "allow", `${name} pane get evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr pane rename w1K:p1 Sheepdog"), "allow", `${name} pane rename evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr agent rename issue1418m1sheep sheep-1"), "allow", `${name} agent rename evaluates allow`);
+    assert.equal(m1EvaluateBash(bash, "herdr tab list --workspace w1K; rm"), "deny", `${name} separator smuggling stays denied`);
+  }
+  assert.equal(m1EvaluateBash(sheepdogBash, "herdr pane close w1K:p1"), "allow", "sheepdog pane close evaluates allow for owned flock pane");
+  assert.equal(m1EvaluateBash(shepherdBash, "herdr pane close w1K:p1"), "deny", "shepherd pane close fails closed to deny");
+  assert.equal(m1EvaluateBash(governorBash, "herdr pane close w1K:p1"), "deny", "governor pane close fails closed to deny");
+});
+
+test("14-18-M1 pane layout invents no tab create plus close plus move plus resize behavior", () => {
+  const agents = createAgents();
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
+    const bash = agents[name].permission.bash;
+    for (const invented of [
+      "herdr tab create*",
+      "herdr tab close*",
+      "herdr tab get*",
+      "herdr tab focus*",
+      "herdr tab rename*",
+      "herdr pane move*",
+      "herdr pane focus*",
+      "herdr pane resize*",
+      "herdr pane swap*",
+      "herdr pane neighbor*",
+      "herdr pane edges*",
+      "herdr pane create*",
+      "herdr tab split*",
+      "herdr workspace create*",
+      "herdr agent events*",
+    ]) {
+      assert.equal(bash[invented], undefined, `${name} must not invent ${invented}`);
+      assert.equal(m1EvaluateBash(bash, invented.replace("*", " w1K")), "deny", `${invented} stays denied for ${name}`);
+    }
+    assert.equal(bash["herdr pane split*"], "allow", `${name} keeps evidenced split for placement`);
+    assert.equal(bash["herdr pane list*"], "allow", `${name} keeps evidenced list for scan`);
+    assert.equal(bash["herdr pane layout*"], "allow", `${name} keeps evidenced layout for geometry`);
+    assert.equal(bash["herdr pane current*"], "allow", `${name} keeps evidenced current for caller context`);
+  }
+});
+
+test("14-18-M1 protected Dev Developer Terminal exclusion presence with honest matcher residual", () => {
+  const agents = createAgents();
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /## Pane layout policy/, "single normative pane policy section exists");
+  assert.match(readme, /at most four panes per tab/, "4-pane cap present");
+  assert.match(readme, /Role grouping/, "role grouping present");
+  assert.match(readme, /Indexed overflow/, "indexed overflow present");
+  assert.match(readme, /Reuse before create/, "reuse before create present");
+  assert.match(readme, /Startup destinations/, "startup destinations present");
+  assert.match(readme, /Ownership/, "ownership present");
+  assert.match(readme, /Protected Dev Developer Terminal exclusion/, "protected exclusion present");
+  assert.match(readme, /excluded from every scan plus split plus placement plus rename plus close plus reuse/, "exclusion covers every scan split placement rename close reuse");
+  assert.match(readme, /Six-step placement/, "6-step placement present");
+  assert.match(readme, /Pane layout residual/, "honest matcher residual present");
+  assert.match(readme, /no `\*Dev\*` glob is added/, "residual documents why no Dev glob");
+  assert.match(readme, /Never invent/, "fallback present with never-invent rule");
+  assert.match(readme, /STOP.*naming the missing capability/, "fallback reports STOP on missing primitive");
+
+  const source = fs.readFileSync(new URL("../src/agents.js", import.meta.url), "utf8");
+  assert.match(source, /SHEPHERD_PANE_ALLOWS/, "shepherd Sheepdog pane matrix present");
+  assert.match(source, /GOVERNOR_PANE_ALLOWS/, "governor Sheepdog pane matrix present");
+  assert.match(source, /SHEEPDOG_PANE_ALLOWS/, "sheepdog flock panes matrix present");
+  assert.match(source, /Protected Dev Developer Terminal exclusion cannot be matcher-enforced/, "matcher residual documented in code");
+  assert.doesNotMatch(source, /"\*Dev\*"/, "no overmatching Dev glob is added");
+  assert.doesNotMatch(source, /"\*Developer Terminal\*"/, "no overmatching Developer Terminal glob is added");
+
+  const sheepdogBash = agents.sheepdog.permission.bash;
+  assert.equal(sheepdogBash["herdr pane close*"], "allow", "sheepdog close is broad by necessity");
+  assert.equal(m1EvaluateBash(sheepdogBash, "herdr pane close w1K:p1"), "allow", "close glob would still match a Dev pane ID, proving the residual: policy plus prompt stay primary");
 });

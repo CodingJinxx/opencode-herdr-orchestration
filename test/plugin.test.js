@@ -718,3 +718,80 @@ test("20-M1 plugin response tool keeps distinct wait codes with Sheepdog routine
   assert.equal(JSON.parse(await sheepdogHooks.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("sheepdog"))).ok, true);
   assert.equal(JSON.parse(await sheepdogHooks.tool.herdr_agent_response.execute({ target: "worker_1" }, m1WaitContext("shepherd-governor"))).error.code, "UNSUPPORTED_WORKER_ROLE");
 });
+
+// --- 14-18-M1 pane layout parity through plugin config ----------------------
+
+test("14-18-M1 pane layout survives plugin config with leaves unchanged", async () => {
+  const hooks = await plugin({}, {});
+  const config = {};
+  hooks.config(config);
+  for (const name of ["shepherd", "shepherd-governor"]) {
+    const bash = config.agent[name].permission.bash;
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+      assert.equal(bash[key], "allow", `plugin ${name} keeps ${key} for single Sheepdog pane`);
+    }
+    assert.equal(bash["herdr pane close*"], undefined, `plugin ${name} keeps no close`);
+  }
+  const sheepdogBash = config.agent.sheepdog.permission.bash;
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(sheepdogBash[key], "allow", `plugin sheepdog keeps ${key} for flock panes`);
+  }
+  for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const bash = config.agent[name].permission.bash;
+    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+      assert.equal(bash[key], undefined, `plugin ${name} gains no pane layout allow for ${key}`);
+    }
+  }
+  assert.equal(config.agent.sheep.permission.bash["herdr*"], "deny", "plugin sheep keeps broad Herdr denial");
+});
+
+test("14-18-M1 pane layout scoped tuples stay scoped with lifecycle retained", async () => {
+  const hooks = await plugin({}, {
+    sheepdogPermissions: { private_squad_status: "allow" },
+    sheepdogPromptAppend: "Use private squad tools according to local policy.",
+  });
+  const config = {};
+  hooks.config(config);
+  assert.equal(config.agent.sheepdog.permission.private_squad_status, "allow");
+  assert.match(config.agent.sheepdog.prompt, /Use private squad tools according to local policy\.$/);
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(config.agent.sheepdog.permission.bash[key], "allow", `sheepdog tuple preserves ${key}`);
+  }
+  assert.equal(config.agent.sheepdog.permission.bash["herdr pane split*"], "allow", "sheepdog tuple preserves split");
+  for (const name of ["shepherd", "shepherd-governor", "grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    assert.equal("private_squad_status" in config.agent[name].permission, false, `sheepdog tuple must not leak to ${name}`);
+  }
+  const shepherdScoped = await plugin({}, {
+    shepherdPermissions: { private_deployment_status: "allow" },
+    shepherdPromptAppend: "Shepherd private note.",
+  });
+  const shepherdConfig = {};
+  shepherdScoped.config(shepherdConfig);
+  assert.equal("private_deployment_status" in shepherdConfig.agent.sheepdog.permission, false, "shepherd tuple must not leak to sheepdog");
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+    assert.equal(shepherdConfig.agent.shepherd.permission.bash[key], "allow", `shepherd tuple preserves ${key}`);
+  }
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(shepherdConfig.agent.sheepdog.permission.bash[key], "allow", "shepherd tuple preserves sheepdog flock panes");
+  }
+});
+
+test("14-18-M1 pane layout README single normative section with Dev exclusion", async () => {
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const sections = [...readme.matchAll(/^## Pane layout policy.*$/gm)].map((m) => m[0]);
+  assert.deepEqual(sections, ["## Pane layout policy (14-18-M1)"], "exactly one normative pane policy section");
+  for (const required of [
+    "at most four panes per tab",
+    "Role grouping",
+    "Indexed overflow",
+    "Reuse before create",
+    "Startup destinations",
+    "Ownership",
+    "Protected Dev Developer Terminal exclusion",
+    "excluded from every scan plus split plus placement plus rename plus close plus reuse",
+    "Six-step placement",
+    "Pane layout residual",
+  ]) {
+    assert.ok(readme.includes(required), `README pane policy must include ${required}`);
+  }
+});

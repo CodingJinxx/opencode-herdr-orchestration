@@ -258,6 +258,91 @@ const GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS = {
   "herdr agent send-keys * ctrl+c*": "allow",
 };
 
+// Pane layout (14-18-M1): live discovery on installed 0.8.2 via full-path
+// `herdr --help` plus `herdr --skill` plus scoped read-only queries
+// (`pane list --workspace w1K`, `tab list --workspace w1K`,
+// `pane current --current`, `pane layout --current`, `agent get <name>`,
+// `pane get w1K:p999` error sampling). Direct `herdr ...` spelling stays
+// denied for leaves; discovery used only read-only help plus list plus get
+// plus current plus layout, never split plus rename plus close plus start.
+// Tab evidenced as list plus create plus get plus focus plus rename plus
+// close; list takes `--workspace <ID>`, create takes
+// `--workspace/--cwd/--label/--env/--focus/--no-focus`, rename takes
+// `<TAB_ID> <LABEL>...`, close plus get plus focus take `<tab_id>`.
+// Pane placement evidenced as split plus move plus focus plus resize plus
+// swap plus layout plus get plus list plus current plus read plus rename plus
+// close; split is `[PANE_ID] --pane/--current --direction right/down --ratio
+// --cwd --env --focus/--no-focus`, move is `<PANE_ID>
+// --tab/--split/--target-pane/--ratio/--new-tab/--workspace/--new-workspace/--label/--tab-label/--focus/--no-focus`,
+// focus and neighbor take `--direction left/right/up/down --pane/--current`,
+// resize takes `--direction --amount --pane/--current`, swap takes
+// `--direction/--pane/--current/--source-pane/--target-pane`, layout takes
+// `--pane/--current`, get takes `<pane_id>`, list takes
+// `--workspace <ID>`, current takes `--pane/--current`, read takes
+// `<PANE_ID> --source visible/recent/recent-unwrapped/detection
+// --lines/--format/--ansi/--raw`, rename takes `<PANE_ID> [LABEL]...
+// --clear`, close takes `<pane_id>`.
+// Agent rename evidenced as `herdr agent rename <TARGET> <NAME>|--clear`
+// (live `agent list` shows `name` such as `issue1418m1sheep` and `agent get`
+// shows `name` plus `pane_id`); pane rename plus tab rename helps evidenced
+// but only pane plus agent rename are enabled, tab rename stays denied to
+// keep the single-tab 4-pane cap.
+// Count queries evidenced as `herdr tab list --workspace <ID>` returning
+// `{"id":"cli:tab:list","result":{"tabs":[{"pane_count":1,"tab_id":"w1K:t1",...}]},"type":"tab_list"}`,
+// `herdr pane list --workspace <ID>` returning
+// `{"id":"cli:pane:list","result":{"panes":[{...,"pane_id":"w1K:p1","tab_id":"w1K:t1","workspace_id":"w1K",...}]},"type":"pane_list"}`
+// (count is length filtered by workspace plus tab), `herdr pane layout
+// --current` returning
+// `{"id":"cli:pane:layout","result":{"layout":{"panes":[...],"splits":[],"focused_pane_id":"w1K:p1",...}},"type":"pane_layout"}`,
+// `herdr pane current --current` returning
+// `{"id":"cli:pane:current","result":{"pane":{...}},"type":"pane_current"}`.
+// Creation JSON per `herdr --skill`: `tab create` returns
+// `.result.tab` plus `.result.root_pane`, `pane split` returns the new pane
+// as `.result.pane` (skill geometry is `pane split --current --direction
+// right/down --cwd "$PWD" --no-focus`, wide to the right and narrow or tall
+// down, reading `.result.pane.pane_id` and never deriving from sidebar
+// order), `pane move` would return
+// `.result.move_result.pane.pane_id` plus `.result.move_result.previous_pane_id`
+// but move stays denied and is documented only.
+// Exits per `herdr --skill` plus live sampling: most controls return JSON on
+// stdout with `id` plus `result` plus `type`; server errors are JSON such as
+// `{"error":{"code":"pane_not_found","message":"pane w1K:p999 not found"},"id":"cli:pane:get"}`
+// on stderr with exit 1; syntax plus validation such as `pane split
+// --direction invalid` returning `invalid split direction` exits with 2.
+// IDs are opaque stable handles (`w1K`, `w1K:t1`, `w1K:p1` from
+// `HERDR_WORKSPACE_ID` plus `HERDR_TAB_ID` plus `HERDR_PANE_ID`); closed IDs
+// are not reused; prefer `--current` and never rely on the UI-focused pane.
+// Fallback if any of tab list plus pane get plus rename plus close plus
+// split are missing: reuse the current pane via `--pane` plus `--current`,
+// report STOP naming the missing capability, never invent `herdr pane
+// create*` plus `herdr tab split*` plus `herdr agent events*` plus
+// `herdr pane move*` plus `herdr pane resize*` plus `herdr workspace
+// create*` behavior.
+// Protected Dev Developer Terminal exclusion cannot be matcher-enforced:
+// pane IDs are opaque and labels are absent from scan plus split plus close
+// command strings, while a `*Dev*` glob would overmatch legitimate
+// `--cwd C:\Dev\...` values, so no such glob is added; the prompt plus
+// README Pane layout policy exclusion stays primary; see README residual.
+const SHEPHERD_PANE_ALLOWS = {
+  "herdr tab list*": "allow",
+  "herdr pane get*": "allow",
+  "herdr pane rename*": "allow",
+  "herdr agent rename*": "allow",
+};
+const GOVERNOR_PANE_ALLOWS = {
+  "herdr tab list*": "allow",
+  "herdr pane get*": "allow",
+  "herdr pane rename*": "allow",
+  "herdr agent rename*": "allow",
+};
+const SHEEPDOG_PANE_ALLOWS = {
+  "herdr tab list*": "allow",
+  "herdr pane get*": "allow",
+  "herdr pane rename*": "allow",
+  "herdr agent rename*": "allow",
+  "herdr pane close*": "allow",
+};
+
 const SHEEPDOG_DENIALS = {
   "git push*": "deny",
   "git pull*": "deny",
@@ -362,6 +447,7 @@ export function createAgents(options = {}) {
         bash: {
           "*": "deny",
           ...herdrInspection,
+          ...SHEPHERD_PANE_ALLOWS,
           ...spawnMatrix(SHEPHERD_SPAWNABLE_AGENTS),
           "git status*": "allow",
           "git diff*": "allow",
@@ -408,6 +494,7 @@ export function createAgents(options = {}) {
         bash: {
           "*": "deny",
           ...herdrInspection,
+          ...GOVERNOR_PANE_ALLOWS,
           ...spawnMatrix(GOVERNOR_SPAWNABLE_AGENTS),
           "git status*": "allow",
           "git diff*": "allow",
@@ -479,6 +566,7 @@ export function createAgents(options = {}) {
           "*": "deny",
           ...safeGitInspection,
           ...herdrInspection,
+          ...SHEEPDOG_PANE_ALLOWS,
           ...spawnMatrix(SHEEPDOG_SPAWNABLE_AGENTS),
           ...SHEEPDOG_HERDR_LIFECYCLE_ALLOWS,
           ...SHEEPDOG_LIFECYCLE_ALLOWS,
