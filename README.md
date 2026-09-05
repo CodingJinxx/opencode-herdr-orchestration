@@ -231,6 +231,47 @@ Cursor continuations do not query Herdr again, so a worker may begin another tur
 
 Waits use a bounded `herdr agent get` poll loop on a short interval (about 10 seconds) with no invented event stream: `working` means continue, `idle`/`done` means retrieve via `herdr_agent_response` until `complete` is true, `blocked` means inspect with `get` plus `read` then decide with never blind input. Start/prompt command failures surface immediately with their distinct code instead of decaying to timeout; disappearance (`agent_not_found`, vanished from `herdr agent list`) gets an explicit report; safety timeout stays the final bound only as `WAIT_TIMEOUT_EXPIRED`. Distinct codes are `AGENT_NOT_SETTLED`, `AGENT_BLOCKED`, `AGENT_ERROR`, `AGENT_NOT_FOUND`, `HERDR_UNAVAILABLE`, and `WAIT_TIMEOUT_EXPIRED`; retries stay bounded and `unknown` stays inconclusive. Sheepdog owns routine flock waits with no per-transition Shepherd wakeups.
 
+### Operational diagnostics (20-M2)
+
+Chosen strategy is a process-local bounded in-memory ring buffer with no filesystem, no Git, no Herdr commands, no plugin tools, and no persistence. Entries are ephemeral like `SHEPHERD_MODE` and response cursors: they do not survive a plugin restart and must never substitute for authoritative retrieval. The mechanism needs no Herdr side features, no config format changes, no installer changes, and no CLI changes; it is a standalone `src/diagnostics.js` helper that is never wired into the M1 wait loop or the response path.
+
+Lightweight operational event records cover exactly eight types: `worker-started`, `prompt-submitted`, `state-changed`, `command-failed`, `settled`, `disappeared`, `timed-out`, and `recovery-started`. Each event stores only `sequence` plus `type` plus `target` plus optional bounded `code` plus optional bounded `detail` plus timestamp `at`; response text, export payloads, cursors, reasoning, transcripts, and scrollback are never fields.
+
+Hard guardrails are enforced in code: no chain of thought, no transcripts, no scrollback (`SENSITIVE_CONTENT_EXCLUDED` on `transcript`, `scrollback`, or `chain of thought`), bounded size per field (target at most 64 characters, code at most 64, detail at most 512), bounded retention per log (default 100 events, configurable 1 through 1000, oldest dropped first with a reported `dropped` count), never read as results, and never a substitute for authoritative retrieval.
+
+Failure taxonomy stays M1-authoritative; diagnostics only labels what the M1 loop already decided:
+
+| Code | Meaning | Troubleshooting |
+| --- | --- | --- |
+| `AGENT_NOT_SETTLED` | `working` or `unknown` (including missing status); continue polling, bounded retries, `unknown` stays inconclusive and never complete | Keep polling `herdr agent get`; do not retrieve yet |
+| `AGENT_BLOCKED` | `blocked`; inspect with `herdr agent get` plus `herdr agent read`, then decide with never blind input | Inspect live state, apply user safety constraints, never answer blind |
+| `AGENT_ERROR` | Explicit `error` or `failed` status; report with preserved state, not retryable as working | Report the explicit error state with preserved state |
+| `AGENT_NOT_FOUND` | Disappearance: `agent_not_found` on `get` or vanished from `herdr agent list` | Emit an explicit disappearance report with preserved state; redesign or re-contract, never treat as settled |
+| `HERDR_UNAVAILABLE` | Start, prompt, `get`, or export command failure (for example connection refused) | Surface immediately with this distinct code; never decay to timeout |
+| `WAIT_TIMEOUT_EXPIRED` | Safety timeout expiry from `waitTimeoutError`; the prompt-level final bound only | Report timeout with preserved state; earlier failures keep their own codes |
+
+Diagnostic versus authoritative split:
+
+- Diagnostics are troubleshooting hints only: `createDiagnosticsLog` plus `record` plus `list` never return response text and never decide settlement, retrieval, review, or integration.
+- Authoritative results flow only through `herdr_agent_response`: call with the worker name, then follow each returned cursor until `complete` is true; continuation pages do not query Herdr again and stay pinned to session, message, digest, and offset.
+- A missing or cleared diagnostics buffer never blocks progress: re-query `herdr agent get` plus `herdr_agent_response` as the source of truth; `unknown` stays inconclusive in both channels.
+- Diagnostics never feed semantic decisions: populating, clearing, or dropping diagnostic events does not change `classifyAgentStatus`, response selection, pagination, cursors, or the retrieval matrix.
+
+Timeout versus early failure troubleshooting lineage:
+
+1. Poll `herdr agent get <name>` on the short interval; `working` means continue (`AGENT_NOT_SETTLED`).
+2. A start or prompt command failure surfaces immediately as `HERDR_UNAVAILABLE` with its own detail; do not wait for the timeout.
+3. Disappearance (`agent_not_found` or absent from `herdr agent list`) surfaces immediately as `AGENT_NOT_FOUND` with an explicit report.
+4. `blocked` surfaces as `AGENT_BLOCKED` for inspect-then-decide; `error` or `failed` surfaces as `AGENT_ERROR` as an explicit report.
+5. Only when none of the above settled the worker does the safety timeout expire as `WAIT_TIMEOUT_EXPIRED` via `waitTimeoutError`, preserving state as the final bound. Record `timed-out` only here; record `command-failed`, `disappeared`, or `settled` at their own steps so a timeout is never confused with an early failure.
+
+File and line references:
+
+- Events and guardrails: `src/diagnostics.js:9` (`DIAGNOSTIC_EVENT_TYPES`), `src/diagnostics.js:20` (`MAX_DIAGNOSTIC_EVENTS_DEFAULT`), `src/diagnostics.js:25` (`SENSITIVE_DIAGNOSTIC_PATTERN`), `src/diagnostics.js:79` (`createDiagnosticsLog`), `src/diagnostics.js:87` (`record`), `src/diagnostics.js:109` (`list`).
+- Authoritative taxonomy and retrieval: `src/response.js:16` (`RESPONSE_MATRIX`), `src/response.js:40` (`classifyAgentStatus`), `src/response.js:59` (`waitTimeoutError`).
+- Bounded wait loop wording: `src/prompts.js:28` (shepherd loop), `src/prompts.js:88` (governor loop), `src/prompts.js:121` (sheepdog loop).
+- Already-permitted wait surfaces only: `src/agents.js:47` (`herdrInspection`).
+
 ## Installation
 
 Install or update the plugin with the cross-platform npm CLI:
