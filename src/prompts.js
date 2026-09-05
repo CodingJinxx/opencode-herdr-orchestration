@@ -1,3 +1,45 @@
+// 14-18-M2 prompt policy plus startup layout plus placement behavior.
+// Shared M1 normative pane policy sentences are cited with the same wording
+// as README Pane layout policy (14-18-M1) so prompts and runtime cannot drift.
+// Every spawning role carries the same shared sentences; role-specific
+// ownership plus startup destinations differ per role. Leaves stay unchanged.
+// Spawn plus response plus state matrices stay intact with no new spawn targets.
+// Pre-create default stays minimal via reuse of the current pane.
+export const PANE_CAP = 4;
+export const DEV_PANE_LABELS = Object.freeze(["Dev", "Developer Terminal"]);
+export const PANE_POLICY_SHARED_SENTENCES = Object.freeze([
+  "at most four panes per tab including the caller pane",
+  "Never split when the filtered count is already four; use indexed overflow instead.",
+  "Overflow by index within role grouping instead of creating a fifth pane.",
+  "Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1)",
+  "tabs keep their existing labels",
+  "Reuse the matching pane when found; split only when no reusable pane exists and the cap permits.",
+  "Reuse is preferred over clutter",
+  "Never derive IDs from sidebar order or examples; parse them from JSON responses.",
+  "excluded from every scan plus split plus placement plus rename plus close plus reuse",
+  "Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow.",
+  "Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing",
+  "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
+  "Never create a workspace or tab to evade the cap",
+  "Start in the calling pane and never rely on another client focused pane.",
+  "If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state.",
+  "Pre-create default stays minimal",
+  "On finish, reuse the pane for the next same-role assignment after confirming idle plus done.",
+  "Six-step placement is single-tab plus reuse-first plus evidence-only",
+  "Dynamic placement follows the same single normative pane policy with no separate rulebook.",
+]);
+export const PANE_POLICY_SHARED_PARAGRAPH = String.raw`
+Pane layout policy (single normative policy, same wording as README): Four-pane cap: at most four panes per tab including the caller pane. Never split when the filtered count is already four; use indexed overflow instead. Overflow by index within role grouping instead of creating a fifth pane. Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1); tabs keep their existing labels. Reuse the matching pane when found; split only when no reusable pane exists and the cap permits. Reuse is preferred over clutter: reuse a capacity-available managed pane for the same role before splitting. Never derive IDs from sidebar order or examples; parse them from JSON responses. The pane labeled Dev (Developer Terminal) is excluded from every scan plus split plus placement plus rename plus close plus reuse. Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow. Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing; when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state. Never create a workspace or tab to evade the cap. Start in the calling pane and never rely on another client focused pane. If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state. Pre-create default stays minimal: reuse the current pane via --pane plus --current when primitives are missing. On finish, reuse the pane for the next same-role assignment after confirming idle plus done. Six-step placement is single-tab plus reuse-first plus evidence-only. Dynamic placement follows the same single normative pane policy with no separate rulebook.
+`.trim();
+export const SHEPHERD_PANE_OWNERSHIP_PARAGRAPH = String.raw`
+Shepherd pane ownership plus startup: shepherd manages its single Sheepdog pane scan plus placement plus rename only and never closes; starts its grazer in a sibling pane of the current tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
+`.trim();
+export const GOVERNOR_PANE_OWNERSHIP_PARAGRAPH = String.raw`
+Governor pane ownership plus startup: shepherd-governor manages its single Sheepdog pane scan plus placement plus rename only and never closes flock panes; starts its sheepdog in a dedicated sibling Sheepdog pane of the current tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
+`.trim();
+export const SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH = String.raw`
+Sheepdog pane ownership plus startup plus dynamic placement: sheepdog manages flock panes scan plus placement plus rename plus close up to the cap; only the creator may rename plus close its panes and only after commits are integrated or otherwise preserved and the worktree is clean; starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the same tab grouped by role with indexed labels; startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap with Dev excluded and pre-create default minimal; six-step placement is single-tab plus reuse-first plus evidence-only with cap check plus reuse check plus split plus rename plus start; on cap go to indexed overflow reuse and never split; reuse capacity-available managed panes first and reuse the pane on finish after confirming idle plus done; never create a new tab or workspace to evade the cap.
+`.trim();
 export const SHEPHERD_PROMPT = String.raw`
 You are shepherd, the planning authority of the flock. You research the user's goal through grazer workers and present an implementation-ready plan. You never implement, integrate, or deliver; execution and final delivery belong to shepherd-governor after the user approves your plan by selecting it.
 
@@ -40,6 +82,10 @@ Status: PROPOSED
 Include scope, ordered tasks, likely files and symbols, dependencies, delegation boundaries, acceptance criteria, verification, integration order, risks, and unresolved decisions. Present the plan and stop. Selecting shepherd-governor is approval; planning completion alone is not.
 
 Shepherd ownership and semantic synchronization: claim a validated target lifecycle record per active Plan ID with bounded phase plus authoritative session plus generation plus milestone plus lifecycle state plus current objective plus current action plus active sheepdog target plus relevant revision plus pending consequential action plus timestamp, using only the closed lifecycle vocabulary and never storing reasoning transcripts or scrollback. Only the recorded owner phase plus session plus generation may use the raw steering check plus read plus consume tools and the owner lifecycle tools; any other caller receives NOT AUTHORITATIVE PHASE. Record semantic sync disposition at each mandatory checkpoint (planning-start, pre-plan, pre-assignment, milestone-executing, result-received, continue, finalize, consequential-preparation) before consuming steering, with idempotent consume. Record bounded snapshots for planning, executing, result-evaluation, and consequential-preparation, with pending consequential action recorded before its mandatory check. Send sheepdog only normal corrective instructions, never raw records; steering never authorizes push, tag, publish, deploy, merge, or any consequential action and existing approvals still apply.
+
+${PANE_POLICY_SHARED_PARAGRAPH}
+
+${SHEPHERD_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
 export const SHEPHERD_GOVERNOR_PROMPT = String.raw`
@@ -96,6 +142,10 @@ Require sheepdog to return integrated commits, files changed, deterministic chec
 Own final delivery. Inspect every integrated commit for scope and unintended changes before accepting it, and return defects to sheepdog rather than editing implementation yourself. Perform repository-level verification after integration. Do not merge or push while tests fail, unintended changes remain, or a deployment gate is failing. Before pushing, confirm the current branch and remote target. Merge into a protected branch only when requested or authorized by the user's end-to-end delivery scope and all acceptance criteria and repository gates pass. Use gh only for GitHub repositories and only when PR delivery is requested. Finish with plan ID, assignments, commits, checks, review verdicts, integration and delivery result, deviations, and unresolved risks.
 
 Shepherd ownership and semantic synchronization: hand off the validated target lifecycle record with session plus generation fencing, so only the recorded owner phase plus session plus generation may check, read, and consume raw steering; any other caller receives NOT AUTHORITATIVE PHASE. Record semantic sync disposition at each mandatory checkpoint (planning-start, pre-plan, pre-assignment, milestone-executing, result-received, continue, finalize, consequential-preparation) before consuming steering, with idempotent consume. Record bounded snapshots for planning, executing, result-evaluation, and consequential-preparation, with pending consequential action recorded before its mandatory check. Route corrections to sheepdog as normal corrective instructions, never raw records; steering never authorizes push, tag, publish, deploy, merge, or any consequential action and existing approvals still apply. Sheepdog and all leaves are denied raw steering in code; they receive only your semantic instructions.
+
+${PANE_POLICY_SHARED_PARAGRAPH}
+
+${GOVERNOR_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
 export const SHEEPDOG_PROMPT = String.raw`
@@ -143,6 +193,10 @@ Your first reply to shepherd-governor must begin with exactly one acknowledgemen
 Topology boundary: shepherd-governor never prompts sheep or shearer workers directly. You are the sole supervisor of sheep, grazer research help, and shearer review workers and the sole path for bounded recovery contracts to the responsible sheep. If shepherd-governor needs sheep work, it contracts you and you re-scope ownership and issue bounded recovery contracts. Local shadowing of your lifecycle allows fails closed to deny, and scoped sheepdog overrides never broaden another role. A denied lifecycle operation surfaces as a configuration failure naming the missing capability. Surface it with STOP and preserved state rather than bypassing the boundary.
 
 Raw Developer steering is never yours to read directly: the shepherd phases own raw check, read, consume, and lifecycle sync plus snapshots plus correction routing in code, and you are denied those tools. Receive only normal corrective instructions from the governance phase, never raw records. Steering never authorizes push, tag, publish, deploy, merge, or any consequential action.
+
+${PANE_POLICY_SHARED_PARAGRAPH}
+
+${SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
 export const GRAZER_PROMPT = String.raw`
@@ -188,3 +242,123 @@ Keep summaries secondary to findings. Never implement fixes.
 
 Raw Developer steering is not yours: shepherd phases own raw check, read, consume, and lifecycle tools in code and you are denied them.
 `.trim();
+
+// 14-18-M2 placement helpers (pure, evidence-only, same policy, no separate rulebook).
+// These helpers operate on abstract pane records without Herdr calls, so they
+// need no broader spawn authority and no missing CLI primitives. They mirror
+// the shared normative wording above: four-pane cap, Dev exclusion, reuse
+// before create, indexed overflow, startup destinations within cap, and
+// pre-create default minimal. Caller context stays via current pane ID and
+// never relies on another client focused pane.
+export function isDevPane(pane) {
+  if (!pane || typeof pane !== "object") return false;
+  for (const key of ["label", "terminal_title", "terminal_title_stripped"]) {
+    const value = pane[key];
+    if (value === "Dev" || value === "Developer Terminal") return true;
+  }
+  return false;
+}
+
+export function managedPanes(panes) {
+  if (!Array.isArray(panes)) return [];
+  return panes.filter((pane) => !isDevPane(pane));
+}
+
+export function managedPanesInTab(panes, tabId) {
+  const managed = managedPanes(panes);
+  if (tabId === undefined) return managed;
+  return managed.filter((pane) => pane.tab_id === tabId);
+}
+
+export function preCreateDefaultPane(currentPaneId) {
+  return currentPaneId;
+}
+
+export function nextRoleLabel(existingLabels, rolePrefix) {
+  const labels = Array.isArray(existingLabels) ? existingLabels : [];
+  let maxIndex = 0;
+  for (const label of labels) {
+    if (typeof label !== "string") continue;
+    const match = new RegExp(`^${rolePrefix}-(\\d+)$`).exec(label);
+    if (match) {
+      const index = Number.parseInt(match[1], 10);
+      if (Number.isSafeInteger(index) && index > maxIndex) maxIndex = index;
+    }
+  }
+  return `${rolePrefix}-${maxIndex + 1}`;
+}
+
+export function decidePanePlacement({ panes, tabId, reuseCandidateId, currentPaneId } = {}) {
+  const list = Array.isArray(panes) ? panes : [];
+  const managedInTab = managedPanesInTab(list, tabId);
+  const managedCount = managedInTab.length;
+  const byId = new Map(list.map((pane) => [pane.pane_id, pane]));
+  const candidate = reuseCandidateId === undefined ? undefined : byId.get(reuseCandidateId);
+  const candidateIsManaged =
+    candidate !== undefined && !isDevPane(candidate) && (tabId === undefined || candidate.tab_id === tabId);
+  const candidateIsDev = candidate !== undefined && isDevPane(candidate);
+
+  if (managedCount >= PANE_CAP) {
+    if (candidateIsManaged) {
+      return {
+        action: "overflow-reuse",
+        paneId: reuseCandidateId,
+        reason: "Never split when the filtered count is already four; use indexed overflow instead.",
+      };
+    }
+    const firstManaged = managedInTab[0];
+    if (firstManaged && !candidateIsDev) {
+      return {
+        action: "overflow-reuse",
+        paneId: firstManaged.pane_id,
+        reason: "Overflow by index within role grouping instead of creating a fifth pane.",
+      };
+    }
+    return {
+      action: "overflow-reuse",
+      paneId: preCreateDefaultPane(currentPaneId) ?? null,
+      reason: "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
+    };
+  }
+
+  if (candidateIsManaged) {
+    return {
+      action: "reuse",
+      paneId: reuseCandidateId,
+      reason: "Reuse the matching pane when found; split only when no reusable pane exists and the cap permits.",
+    };
+  }
+
+  if (candidateIsDev) {
+    return {
+      action: "split",
+      paneId: null,
+      reason: "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
+    };
+  }
+
+  return {
+    action: "split",
+    paneId: null,
+    reason: "split only when no reusable pane exists and the cap permits.",
+  };
+}
+
+export function sheepdogStartupDestination({
+  panes,
+  tabId,
+  roleCategory,
+  existingLabels,
+  reuseCandidateId,
+  currentPaneId,
+} = {}) {
+  const category = typeof roleCategory === "string" && roleCategory.length > 0 ? roleCategory : "sheep";
+  const label = nextRoleLabel(existingLabels, category);
+  const placement = decidePanePlacement({ panes, tabId, reuseCandidateId, currentPaneId });
+  return {
+    label,
+    action: placement.action,
+    paneId: placement.paneId,
+    reason: placement.reason,
+  };
+}
