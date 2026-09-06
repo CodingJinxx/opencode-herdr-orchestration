@@ -16,7 +16,7 @@ The global OpenCode file is `~/.config/opencode/opencode.json` or `~/.config/ope
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@codingjinxx/flocky"]
+  "plugin": ["@ia-forge/flocky"]
 }
 ```
 
@@ -27,7 +27,7 @@ Current OpenCode releases may record but not execute an npm plugin referenced on
 ```jsonc
 {
   "plugin": [
-    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/@codingjinxx/flocky/src/plugin.js"
+    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/@ia-forge/flocky/src/plugin.js"
   ]
 }
 ```
@@ -55,7 +55,7 @@ Model choices live as options in a plugin tuple beside the plugin name. The tupl
 {
   "plugin": [
     [
-      "@codingjinxx/flocky",
+      "@ia-forge/flocky",
       {
         "shepherdModel": "anthropic/claude-sonnet-4-6",
         "sheepdogModel": "litellm/glm-5.3-flash",
@@ -87,7 +87,7 @@ Machine-specific planning permissions and instructions use two scoped options th
 {
   "plugin": [
     [
-      "@codingjinxx/flocky",
+      "@ia-forge/flocky",
       {
         "shepherdPermissions": {
           "private_deployment_status": "allow"
@@ -109,7 +109,7 @@ Squad-local machine permissions and instructions use the same scoped pattern and
 {
   "plugin": [
     [
-      "@codingjinxx/flocky",
+      "@ia-forge/flocky",
       {
         "sheepdogPermissions": {
           "private_squad_status": "allow"
