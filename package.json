@@ -1,6 +1,6 @@
 {
   "name": "opencode-herdr-orchestration",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Capability-separated Herdr orchestration agents for OpenCode",
   "author": "CodingJinxx",
   "repository": {
@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/plugin.js && node --check src/index.js && node --check src/agents.js && node --check src/prompts.js && node --check src/response.js && node --check src/state.js && node --check src/diagnostics.js && node --check src/steer.js && node --check src/installer.js && node --check bin/orchestration.js"
+    "check": "node --check src/plugin.js && node --check src/index.js && node --check src/agents.js && node --check src/prompts.js && node --check src/response.js && node --check src/state.js && node --check src/diagnostics.js && node --check src/steer.js && node --check src/installer.js && node --check src/doctor.js && node --check bin/orchestration.js"
   },
   "engines": {
     "node": ">=20"
