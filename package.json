@@ -1,6 +1,6 @@
 {
   "name": "opencode-herdr-orchestration",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Capability-separated Herdr orchestration agents for OpenCode",
   "author": "CodingJinxx",
   "repository": {
