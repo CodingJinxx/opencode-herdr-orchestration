@@ -19,6 +19,14 @@ import {
   STEERING_TOOLS,
 } from "../src/agents.js";
 import * as packageEntry from "../src/plugin.js";
+import {
+  DEV_PANE_LABELS,
+  GOVERNOR_PANE_OWNERSHIP_PARAGRAPH,
+  PANE_CAP,
+  PANE_POLICY_SHARED_PARAGRAPH,
+  SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH,
+  SHEPHERD_PANE_OWNERSHIP_PARAGRAPH,
+} from "../src/prompts.js";
 
 function realpath(value) {
   return (fs.realpathSync.native ?? fs.realpathSync)(value);
@@ -776,22 +784,23 @@ test("14-18-M1 pane layout scoped tuples stay scoped with lifecycle retained", a
   }
 });
 
-test("14-18-M1 pane layout README single normative section with Dev exclusion", async () => {
-  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const sections = [...readme.matchAll(/^## Pane layout policy.*$/gm)].map((m) => m[0]);
-  assert.deepEqual(sections, ["## Pane layout policy (14-18-M1)"], "exactly one normative pane policy section");
+test("14-18-M1 pane layout single normative wording with Dev exclusion from source", async () => {
+  assert.equal(PANE_CAP, 4);
+  assert.deepEqual([...DEV_PANE_LABELS], ["Dev", "Developer Terminal"]);
   for (const required of [
     "at most four panes per tab",
-    "Role grouping",
-    "Indexed overflow",
-    "Reuse before create",
-    "Startup destinations",
-    "Ownership",
-    "Protected Dev Developer Terminal exclusion",
+    "use indexed overflow instead",
+    "Overflow by index within role grouping",
+    "Reuse the matching pane when found",
     "excluded from every scan plus split plus placement plus rename plus close plus reuse",
-    "Six-step placement",
-    "Pane layout residual",
+    "Never count it toward the four-pane cap",
+    "Never create a workspace or tab to evade the cap",
+    "Six-step placement is single-tab plus reuse-first plus evidence-only",
   ]) {
-    assert.ok(readme.includes(required), `README pane policy must include ${required}`);
+    assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes(required), `shared pane paragraph must include ${required}`);
   }
+  assert.ok(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd manages its single Sheepdog pane"));
+  assert.ok(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd-governor manages its single Sheepdog pane"));
+  assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("sheepdog manages flock panes"));
+  assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium"));
 });
