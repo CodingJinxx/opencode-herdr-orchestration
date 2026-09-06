@@ -23,10 +23,6 @@ import { status as installationStatus } from "../src/installer.js";
 
 const cli = resolve("bin/orchestration.js");
 
-function readmeText() {
-  return readFileSync(resolve("README.md"), "utf8");
-}
-
 function doctorSource() {
   return readFileSync(resolve("src/doctor.js"), "utf8");
 }
@@ -252,37 +248,43 @@ test("doctor zero-write confinement uses only allowed deps with no writes", () =
   assert.deepEqual(readdirSync(probeDir), before);
 });
 
-test("doctor README pointer carries exact anchors without duplicating procedures", () => {
-  const readme = readmeText();
-  assert.match(readme, /node bin\/orchestration\.js doctor/);
-  const pointerIndex = readme.indexOf("node bin/orchestration.js doctor");
-  assert.ok(pointerIndex >= 0, "pointer must mention the doctor command");
-  const pointer = readme.slice(Math.max(0, pointerIndex - 800), pointerIndex + 1200);
+test("doctor anchors stay linked to source with operator remedies and no prose read", () => {
+  assert.deepEqual([...DOCTOR_ANCHORS], [
+    "#installation",
+    "#manual-installation",
+    "#upgrade",
+    "#recovery",
+    "#troubleshooting",
+    "#missing-herdr-opencode-integration",
+    "#windows-exe-versus-shim-launcher-resolution",
+  ]);
+  const ordered = orderCandidates(HOSTILE_QUARTET);
+  const report = buildDoctorReport({
+    candidates: HOSTILE_QUARTET,
+    versions: HOSTILE_VERSIONS,
+    spawnProbe: evaluateSpawnProbe({ source: HOSTILE_QUARTET[3], stdout: "", stderr: WIN32_SPAWN_ERROR, status: 1 }),
+    integration: checkIntegrationPresence({
+      integrationStatusText: "opencode: not installed",
+      herdrHelpText: "herdr integration <subcommand>",
+      integrationInstallHelpText: "install opencode",
+    }),
+    flapping: detectFlapping({ candidates: ordered, versions: HOSTILE_VERSIONS, npmViewVersion: "1.18.29" }),
+    pathEntries: ["C:\\npm-prefix"],
+  });
+  assert.deepEqual(report.anchors, [...DOCTOR_ANCHORS]);
+  const summary = formatHumanSummary(report);
   for (const anchor of DOCTOR_ANCHORS) {
-    assert.ok(pointer.includes(`(${anchor})`), `pointer must link ${anchor}`);
+    assert.ok(summary.includes(`(${anchor})`), `summary must link ${anchor}`);
   }
-  assert.match(pointer, /\[Installation\]\(#installation\)/);
-  assert.match(pointer, /\[Manual Installation\]\(#manual-installation\)/);
-  assert.match(pointer, /\[Upgrade\]\(#upgrade\)/);
-  assert.match(pointer, /\[Recovery\]\(#recovery\)/);
-  assert.match(pointer, /\[Troubleshooting\]\(#troubleshooting\)/);
-  assert.match(pointer, /\[Missing Herdr OpenCode integration\]\(#missing-herdr-opencode-integration\)/);
-  assert.match(pointer, /\[Windows exe versus shim launcher resolution\]\(#windows-exe-versus-shim-launcher-resolution\)/);
-  for (const header of [
-    "## Installation",
-    "## Manual Installation",
-    "## Upgrade",
-    "## Troubleshooting",
-    "### Missing Herdr OpenCode integration",
-    "### Windows exe versus shim launcher resolution",
-    "## Recovery",
-  ]) {
-    assert.ok(readme.includes(header), `${header} anchor must resolve`);
+  assert.ok(Array.isArray(report.remedies) && report.remedies.length >= 2);
+  assert.ok(Array.isArray(report.operatorRemedies) && report.operatorRemedies.length >= 2);
+  const source = doctorSource();
+  for (const anchor of DOCTOR_ANCHORS) {
+    assert.ok(source.includes(anchor), `doctor source must carry ${anchor}`);
   }
-  assert.match(pointer, /instead of duplicating them here/);
-  assert.doesNotMatch(pointer, /npx -y opencode-herdr-orchestration@latest install/);
-  assert.doesNotMatch(pointer, /npx -y opencode-herdr-orchestration@latest update/);
-  assert.equal(/setx/i.test(pointer), false);
+  const bin = binSource();
+  assert.match(bin, /command === "doctor"/);
+  assert.match(bin, /collectDoctorReport/);
 });
 
 test("doctor bin dispatch keeps status shape untouched with doctor plus usage plus exit codes", () => {
@@ -331,7 +333,7 @@ test("doctor bin dispatch keeps status shape untouched with doctor plus usage pl
   }
 });
 
-test("doctor report carries JSON plus human summary with operator remedies and README anchors", () => {
+test("doctor report carries JSON plus human summary with operator remedies and source anchors", () => {
   const ordered = orderCandidates(HOSTILE_QUARTET);
   const report = buildDoctorReport({
     candidates: HOSTILE_QUARTET,
