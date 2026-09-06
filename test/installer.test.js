@@ -347,6 +347,7 @@ test("registers the renamed agent roles without compatibility fallbacks", () => 
     "sheep",
     "shearer-low",
     "shearer-medium",
+    "developer",
   ]);
   for (const legacy of [
     "shepherd-plan",

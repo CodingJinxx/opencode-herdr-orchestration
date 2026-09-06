@@ -5,6 +5,13 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import spawn from "cross-spawn";
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
+import {
+  STEER_COMMAND_AGENT as STEER_AGENT,
+  STEER_COMMAND_DESCRIPTION as STEER_DESCRIPTION,
+  STEER_COMMAND_NAME as STEER_NAME,
+  STEER_COMMAND_TEMPLATE as STEER_TEMPLATE,
+  steerCommandEntry as steerEntry,
+} from "./steer.js";
 
 export const PACKAGE_NAME = "opencode-herdr-orchestration";
 const NPM_COMMAND = "npm";
@@ -17,6 +24,7 @@ export const AGENT_NAMES = [
   "sheep",
   "shearer-low",
   "shearer-medium",
+  "developer",
 ];
 
 // Agents register dynamically through the plugin, so the package owns no agent
@@ -391,6 +399,64 @@ export function writePluginConfig(configDir, remove = false, models) {
   return { file, backup, changed: true, existed };
 }
 
+// Native /steer command owned by the installer. Single source for the shape
+// lives in src/steer.js; these helpers persist it with the same JSONC
+// preserve-comments plus backup discipline as the plugin config. The entry
+// pins agent developer, carries an $ARGUMENTS template, and describes the
+// Developer-only direct-write hook.
+export {
+  STEER_COMMAND_AGENT,
+  STEER_COMMAND_DESCRIPTION,
+  STEER_COMMAND_NAME,
+  STEER_COMMAND_TEMPLATE,
+  steerCommandEntry,
+} from "./steer.js";
+
+export function updateCommandConfig(text, commandName, entry, remove = false) {
+  const errors = [];
+  const parsed = parse(text || "{}", errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length) {
+    const first = errors[0];
+    throw new Error(`Invalid OpenCode JSONC at offset ${first.offset}: ${printParseErrorCode(first.error)}.`);
+  }
+  if (typeof commandName !== "string" || commandName.length === 0) {
+    throw new Error("Command name must be a non-empty string.");
+  }
+  const source = text || "{}";
+  if (remove && parsed?.command?.[commandName] === undefined) return source;
+  const formattingOptions = { insertSpaces: true, tabSize: 2, eol: source.includes("\r\n") ? "\r\n" : "\n" };
+  const value = remove ? undefined : entry;
+  return applyEdits(source, modify(source, ["command", commandName], value, { formattingOptions }));
+}
+
+export function updateSteerCommand(text, entry = steerEntry(), remove = false) {
+  return updateCommandConfig(text, STEER_NAME, entry, remove);
+}
+
+export function isSteerCommandConfigured(text) {
+  const config = parse(text || "{}", [], { allowTrailingComma: true, disallowComments: false });
+  const entry = config?.command?.[STEER_NAME];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  return (
+    entry.agent === STEER_AGENT &&
+    typeof entry.template === "string" &&
+    entry.template.includes("$ARGUMENTS") &&
+    entry.description === STEER_DESCRIPTION
+  );
+}
+
+export function writeSteerCommand(configDir, remove = false) {
+  mkdirSync(configDir, { recursive: true });
+  const file = findConfigFile(configDir);
+  const existed = existsSync(file);
+  const previous = existed ? readFileSync(file, "utf8") : '{\n  "$schema": "https://opencode.ai/config.json"\n}\n';
+  const next = updateSteerCommand(previous, steerEntry(), remove);
+  if (next === previous) return { file, backup: null, changed: false, existed };
+  const backup = backupFile(file);
+  writeFileSync(file, next, "utf8");
+  return { file, backup, changed: true, existed };
+}
+
 export function restoreBackup(file, backup, existed = true) {
   if (backup && existsSync(backup)) copyFileSync(backup, file);
   else if (!existed) rmSync(file, { force: true });
@@ -552,9 +618,16 @@ export function validateOpenCode(configDir) {
 export function status(configDir, packageRoot) {
   const file = findConfigFile(configDir);
   let configured = false;
+  let steerCommandConfigured = false;
   if (existsSync(file)) {
-    const config = parse(readFileSync(file, "utf8"), [], { allowTrailingComma: true, disallowComments: false });
+    const text = readFileSync(file, "utf8");
+    const config = parse(text, [], { allowTrailingComma: true, disallowComments: false });
     configured = Array.isArray(config?.plugin) && config.plugin.some(isOrchestrationPlugin);
+    try {
+      steerCommandConfigured = isSteerCommandConfigured(text);
+    } catch {
+      steerCommandConfigured = false;
+    }
   }
   const installed = installedVersion(configDir);
   let detectedAgents = [];
@@ -586,6 +659,7 @@ export function status(configDir, packageRoot) {
     updateAvailable: Boolean(installed && latest && installed !== latest),
     configFile: file,
     pluginConfigured: configured,
+    steerCommandConfigured,
     detectedAgents,
     agentsReady: detectedAgents.length === AGENT_NAMES.length,
     obsoleteAgentFiles,
