@@ -1,7 +1,7 @@
-# opencode-herdr-orchestration
+# flocky
 
-[![CI](https://github.com/CodingJinxx/opencode-herdr-orchestration/actions/workflows/ci.yml/badge.svg)](https://github.com/CodingJinxx/opencode-herdr-orchestration/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/opencode-herdr-orchestration.svg)](https://www.npmjs.com/package/opencode-herdr-orchestration)
+[![CI](https://github.com/CodingJinxx/flocky/actions/workflows/ci.yml/badge.svg)](https://github.com/CodingJinxx/flocky/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@codingjinxx/flocky.svg)](https://www.npmjs.com/package/@codingjinxx/flocky)
 [![Node >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
 
 Capability-separated OpenCode agents for planning, implementation, independent review, and delivery through Herdr, organized as **Developer → Shepherd → Flock**. This package registers the agents, provides structured worker-response retrieval, injects session-specific orchestration mode into shell environments, and ships a reproducible Git `pre-push` policy for new and existing repositories.
@@ -17,8 +17,8 @@ You need Node.js 20 or newer, a working OpenCode install, and Herdr on the stabl
 Install or update with the cross-platform npm CLI:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest install
-npx -y opencode-herdr-orchestration@latest install --with-hooks
+npx -y @codingjinxx/flocky@latest install
+npx -y @codingjinxx/flocky@latest install --with-hooks
 ```
 
 The first form installs the global OpenCode plugin entry and agent models. The second form also installs the shared Git push policy. For update, manual setup, stale file migration, and full options, see [Getting Started](docs/getting-started.md) and [CLI Reference](docs/cli-reference.md).
@@ -106,7 +106,7 @@ For workarounds, launcher resolution, integration checks, interrupted-operation 
 
 ## Docs
 
-Start with [Getting Started](docs/getting-started.md) for install plus update plus migration, then use the guides below for daily work. Detail lives in docs so this landing page stays short. Published site: https://codingjinxx.github.io/opencode-herdr-orchestration/
+Start with [Getting Started](docs/getting-started.md) for install plus update plus migration, then use the guides below for daily work. Detail lives in docs so this landing page stays short. Published site: https://codingjinxx.github.io/flocky/
 
 - [Home](docs/index.md) — docs landing with navigation to every guide.
 - [Getting Started](docs/getting-started.md) — install, update, manual setup, stale file migration, and verify steps.

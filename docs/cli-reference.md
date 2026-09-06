@@ -5,20 +5,20 @@ layout: default
 
 # CLI Reference
 
-This page documents every `opencode-herdr-orchestration` package command exactly as implemented in `bin/orchestration.js`. For the install plus upgrade walkthrough, see [Getting Started](./getting-started.html).
+This page documents every `@codingjinxx/flocky` package command exactly as implemented in `bin/orchestration.js`. For the install plus upgrade walkthrough, see [Getting Started](./getting-started.html).
 
 Live versions at verification time were package `0.3.2`, OpenCode `1.18.29`, Herdr `0.8.2`, channel `stable`, and integration `opencode: current (v10)`. When command output disagrees with this page, trust the live output from `status` and `doctor`.
 
 ## Usage
 
 ```text
-Usage: opencode-herdr-orchestration <install|update|configure-agents|status|doctor|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]
+Usage: flocky <install|update|configure-agents|status|doctor|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]
 ```
 
 Invoke through the published package or from a checkout:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest <command>
+npx -y @codingjinxx/flocky@latest <command>
 node ./bin/orchestration.js <command>
 ```
 
@@ -70,19 +70,19 @@ The `uninstall` command removes the native steer command entry, removes the orch
 The Git policy procedure uses two focused commands. To enable the policy, run:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest install-hooks
+npx -y @codingjinxx/flocky@latest install-hooks
 ```
 
 This path copies the packaged `pre-push` hook into the stable user location below and points global `core.hooksPath` there:
 
 ```text
-~/.config/opencode-herdr-orchestration/hooks
+~/.config/flocky/hooks
 ```
 
 From that point every new clone, initialized repository, and linked worktree receives the same policy automatically. When global `core.hooksPath` already holds a different value, the command reports the conflict and requires an explicit `--force` rerun only after the existing hook setup has been reviewed. To inspect hook state, use `status`. To disable the policy, run:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest uninstall-hooks
+npx -y @codingjinxx/flocky@latest uninstall-hooks
 ```
 
 Removal clears the global setting only when it points at this package and deletes the installed hook directory; any unrelated hooks path is left unchanged with an explanatory message. In governance mode the policy always protects `main` plus `master`; repository-specific branches are added with:
