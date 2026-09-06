@@ -288,9 +288,9 @@ const GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS = {
 // --clear`, close takes `<pane_id>`.
 // Agent rename evidenced as `herdr agent rename <TARGET> <NAME>|--clear`
 // (live `agent list` shows `name` such as `issue1418m1sheep` and `agent get`
-// shows `name` plus `pane_id`); pane rename plus tab rename helps evidenced
-// but only pane plus agent rename are enabled, tab rename stays denied to
-// keep the single-tab 4-pane cap.
+// shows `name` plus `pane_id`); pane rename plus agent rename plus tab create
+// helps evidenced and enabled for per-tab overflow, tab rename stays denied
+// to keep the per-tab 4-pane cap with new-tab overflow.
 // Count queries evidenced as `herdr tab list --workspace <ID>` returning
 // `{"id":"cli:tab:list","result":{"tabs":[{"pane_count":1,"tab_id":"w1K:t1",...}]},"type":"tab_list"}`,
 // `herdr pane list --workspace <ID>` returning
@@ -316,19 +316,21 @@ const GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS = {
 // IDs are opaque stable handles (`w1K`, `w1K:t1`, `w1K:p1` from
 // `HERDR_WORKSPACE_ID` plus `HERDR_TAB_ID` plus `HERDR_PANE_ID`); closed IDs
 // are not reused; prefer `--current` and never rely on the UI-focused pane.
-// Fallback if any of tab list plus pane get plus rename plus close plus
-// split are missing: reuse the current pane via `--pane` plus `--current`,
-// report STOP naming the missing capability, never invent `herdr pane
-// create*` plus `herdr tab split*` plus `herdr agent events*` plus
-// `herdr pane move*` plus `herdr pane resize*` plus `herdr workspace
+// Fallback if any of tab list plus tab create plus pane get plus rename plus
+// close plus split are missing: reuse the current pane via `--pane` plus
+// `--current`, report STOP naming the missing capability, never invent
+// `herdr pane create*` plus `herdr tab split*` plus `herdr agent events*`
+// plus `herdr pane move*` plus `herdr pane resize*` plus `herdr workspace
 // create*` behavior.
 // Protected Dev Developer Terminal exclusion cannot be matcher-enforced:
 // pane IDs are opaque and labels are absent from scan plus split plus close
 // command strings, while a `*Dev*` glob would overmatch legitimate
-// `--cwd C:\Dev\...` values, so no such glob is added; the prompt plus
-// README Pane layout policy exclusion stays primary; see README residual.
+// `--cwd C:\Dev\...` values, so no such glob is added; the prompt plus docs
+// architecture tab section exclusion stays primary with per-tab cap plus
+// new-tab overflow plus never touch Dev in any tab; see docs residual.
 const SHEPHERD_PANE_ALLOWS = {
   "herdr tab list*": "allow",
+  "herdr tab create*": "allow",
   "herdr pane get*": "allow",
   "herdr pane rename*": "allow",
   "herdr agent rename*": "allow",
@@ -341,6 +343,7 @@ const GOVERNOR_PANE_ALLOWS = {
 };
 const SHEEPDOG_PANE_ALLOWS = {
   "herdr tab list*": "allow",
+  "herdr tab create*": "allow",
   "herdr pane get*": "allow",
   "herdr pane rename*": "allow",
   "herdr agent rename*": "allow",
