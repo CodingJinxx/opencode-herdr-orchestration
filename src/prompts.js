@@ -1,6 +1,6 @@
-// 14-18-M2 prompt policy plus startup layout plus placement behavior.
-// Shared M1 normative pane policy sentences are cited with the same wording
-// as README Pane layout policy (14-18-M1) so prompts and runtime cannot drift.
+// Prompt policy plus startup layout plus placement behavior.
+// Shared normative pane policy sentences are cited with the same wording
+// as docs architecture tab section so prompts and runtime cannot drift.
 // Every spawning role carries the same shared sentences; role-specific
 // ownership plus startup destinations differ per role. Leaves stay unchanged.
 // Spawn plus response plus state matrices stay intact with no new spawn targets.
@@ -9,8 +9,9 @@ export const PANE_CAP = 4;
 export const DEV_PANE_LABELS = Object.freeze(["Dev", "Developer Terminal"]);
 export const PANE_POLICY_SHARED_SENTENCES = Object.freeze([
   "at most four panes per tab including the caller pane",
-  "Never split when the filtered count is already four; use indexed overflow instead.",
-  "Overflow by index within role grouping instead of creating a fifth pane.",
+  "Reuse first within the four-pane cap per tab",
+  "Never split when the filtered count is already four; overflow to a new tab instead.",
+  "Overflow to a new tab with indexed role labels when the cap binds.",
   "Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1)",
   "tabs keep their existing labels",
   "Reuse the matching pane when found; split only when no reusable pane exists and the cap permits.",
@@ -19,26 +20,27 @@ export const PANE_POLICY_SHARED_SENTENCES = Object.freeze([
   "excluded from every scan plus split plus placement plus rename plus close plus reuse",
   "Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow.",
   "Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing",
-  "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
-  "Never create a workspace or tab to evade the cap",
+  "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or overflow to a new tab or report STOP with preserved state.",
+  "Never create a workspace to evade the cap",
+  "Never touch the Dev pane in any tab.",
   "Start in the calling pane and never rely on another client focused pane.",
   "If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state.",
   "Pre-create default stays minimal",
   "On finish, reuse the pane for the next same-role assignment after confirming idle plus done.",
-  "Six-step placement is single-tab plus reuse-first plus evidence-only",
-  "Dynamic placement follows the same single normative pane policy with no separate rulebook.",
+  "Six-step placement is reuse-first plus evidence-only with new-tab overflow",
+  "Dynamic placement follows the same single normative pane policy with new-tab overflow and no separate rulebook.",
 ]);
 export const PANE_POLICY_SHARED_PARAGRAPH = String.raw`
-Pane layout policy (single normative policy, same wording as README): Four-pane cap: at most four panes per tab including the caller pane. Never split when the filtered count is already four; use indexed overflow instead. Overflow by index within role grouping instead of creating a fifth pane. Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1); tabs keep their existing labels. Reuse the matching pane when found; split only when no reusable pane exists and the cap permits. Reuse is preferred over clutter: reuse a capacity-available managed pane for the same role before splitting. Never derive IDs from sidebar order or examples; parse them from JSON responses. The pane labeled Dev (Developer Terminal) is excluded from every scan plus split plus placement plus rename plus close plus reuse. Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow. Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing; when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state. Never create a workspace or tab to evade the cap. Start in the calling pane and never rely on another client focused pane. If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state. Pre-create default stays minimal: reuse the current pane via --pane plus --current when primitives are missing. On finish, reuse the pane for the next same-role assignment after confirming idle plus done. Six-step placement is single-tab plus reuse-first plus evidence-only. Dynamic placement follows the same single normative pane policy with no separate rulebook.
+Pane layout policy (single normative policy, same wording as docs architecture tab section): Four-pane cap: at most four panes per tab including the caller pane. Reuse first within the four-pane cap per tab. Never split when the filtered count is already four; overflow to a new tab instead. Overflow to a new tab with indexed role labels when the cap binds. Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1); tabs keep their existing labels. Reuse the matching pane when found; split only when no reusable pane exists and the cap permits. Reuse is preferred over clutter: reuse a capacity-available managed pane for the same role before splitting. Never derive IDs from sidebar order or examples; parse them from JSON responses. The pane labeled Dev (Developer Terminal) is excluded from every scan plus split plus placement plus rename plus close plus reuse. Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow. Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing; when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or overflow to a new tab or report STOP with preserved state. Never create a workspace to evade the cap. Never touch the Dev pane in any tab. Start in the calling pane and never rely on another client focused pane. If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state. Pre-create default stays minimal: reuse the current pane via --pane plus --current when primitives are missing. On finish, reuse the pane for the next same-role assignment after confirming idle plus done. Six-step placement is reuse-first plus evidence-only with new-tab overflow. Dynamic placement follows the same single normative pane policy with new-tab overflow and no separate rulebook.
 `.trim();
 export const SHEPHERD_PANE_OWNERSHIP_PARAGRAPH = String.raw`
-Shepherd pane ownership plus startup: shepherd manages its single Sheepdog pane scan plus placement plus rename only and never closes; starts its grazer in a sibling pane of the current tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
+Shepherd pane ownership plus startup: shepherd manages its single Sheepdog pane scan plus placement plus rename plus tab create only and never closes; starts its grazer in a sibling pane of the current tab with overflow to a new tab with indexed role labels when the cap binds; leaves gain no pane plus tab plus rename commands and stay unchanged.
 `.trim();
 export const GOVERNOR_PANE_OWNERSHIP_PARAGRAPH = String.raw`
 Governor pane ownership plus startup: shepherd-governor manages its single Sheepdog pane scan plus placement plus rename only and never closes flock panes; starts its sheepdog in a dedicated sibling Sheepdog pane of the current tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
 `.trim();
 export const SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH = String.raw`
-Sheepdog pane ownership plus startup plus dynamic placement: sheepdog manages flock panes scan plus placement plus rename plus close up to the cap; only the creator may rename plus close its panes and only after commits are integrated or otherwise preserved and the worktree is clean; starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the same tab grouped by role with indexed labels; startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap with Dev excluded and pre-create default minimal; six-step placement is single-tab plus reuse-first plus evidence-only with cap check plus reuse check plus split plus rename plus start; on cap go to indexed overflow reuse and never split; reuse capacity-available managed panes first and reuse the pane on finish after confirming idle plus done; never create a new tab or workspace to evade the cap.
+Sheepdog pane ownership plus startup plus dynamic placement: sheepdog manages flock panes scan plus placement plus rename plus close plus tab create up to the per-tab cap; only the creator may rename plus close its panes and only after commits are integrated or otherwise preserved and the worktree is clean; starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the current tab with overflow to a new tab with indexed role labels when the cap binds grouped by role with indexed labels; startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab with Dev excluded in any tab and pre-create default minimal; six-step placement is reuse-first plus evidence-only with new-tab overflow with cap check plus reuse check plus split plus rename plus tab create plus start; on cap go to a new tab with indexed role labels and never split a fifth pane; reuse capacity-available managed panes first within the cap and reuse the pane on finish after confirming idle plus done; never create a workspace to evade the cap and never touch the Dev pane in any tab.
 `.trim();
 export const SHEPHERD_PROMPT = String.raw`
 You are shepherd, the planning authority of the flock. You research the user's goal through grazer workers and present an implementation-ready plan. You never implement, integrate, or deliver; execution and final delivery belong to shepherd-governor after the user approves your plan by selecting it.
@@ -258,13 +260,14 @@ Keep summaries secondary to findings. Never implement fixes.
 Raw Developer steering is not yours: shepherd phases own raw check, read, consume, and lifecycle tools in code and you are denied them.
 `.trim();
 
-// 14-18-M2 placement helpers (pure, evidence-only, same policy, no separate rulebook).
+// Placement helpers (pure, evidence-only, same policy, no separate rulebook).
 // These helpers operate on abstract pane records without Herdr calls, so they
 // need no broader spawn authority and no missing CLI primitives. They mirror
-// the shared normative wording above: four-pane cap, Dev exclusion, reuse
-// before create, indexed overflow, startup destinations within cap, and
-// pre-create default minimal. Caller context stays via current pane ID and
-// never relies on another client focused pane.
+// the shared normative wording above: four-pane cap per tab, Dev exclusion
+// in any tab, reuse first within cap, new-tab overflow with indexed role
+// labels, startup destinations per tab, and pre-create default minimal.
+// Caller context stays via current pane ID and never relies on another
+// client focused pane.
 export function isDevPane(pane) {
   if (!pane || typeof pane !== "object") return false;
   for (const key of ["label", "terminal_title", "terminal_title_stripped"]) {
@@ -318,21 +321,13 @@ export function decidePanePlacement({ panes, tabId, reuseCandidateId, currentPan
       return {
         action: "overflow-reuse",
         paneId: reuseCandidateId,
-        reason: "Never split when the filtered count is already four; use indexed overflow instead.",
-      };
-    }
-    const firstManaged = managedInTab[0];
-    if (firstManaged && !candidateIsDev) {
-      return {
-        action: "overflow-reuse",
-        paneId: firstManaged.pane_id,
-        reason: "Overflow by index within role grouping instead of creating a fifth pane.",
+        reason: "Reuse first within the four-pane cap per tab",
       };
     }
     return {
-      action: "overflow-reuse",
-      paneId: preCreateDefaultPane(currentPaneId) ?? null,
-      reason: "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
+      action: "new-tab",
+      paneId: null,
+      reason: "Overflow to a new tab with indexed role labels when the cap binds.",
     };
   }
 
@@ -348,7 +343,7 @@ export function decidePanePlacement({ panes, tabId, reuseCandidateId, currentPan
     return {
       action: "split",
       paneId: null,
-      reason: "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or report STOP with preserved state.",
+      reason: "when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or overflow to a new tab or report STOP with preserved state.",
     };
   }
 
