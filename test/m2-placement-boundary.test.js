@@ -3,16 +3,25 @@ import assert from "node:assert/strict";
 
 import {
   PANE_CAP,
+  ROLE_TAB_POLICY_PARAGRAPH,
+  ROLE_TAB_POLICY_SENTENCES,
   SHEEPDOG_PROMPT,
   SHEPHERD_GOVERNOR_PROMPT,
   SHEPHERD_PROMPT,
   decidePanePlacement,
+  governorStartupDestination,
   isDevPane,
   managedPanes,
   managedPanesInTab,
   nextRoleLabel,
+  nextRoleTabLabel,
   preCreateDefaultPane,
+  roleTabBaseLabel,
+  roleTabCapFor,
+  roleTabGeometry,
+  sheepdogRoleTabDestination,
   sheepdogStartupDestination,
+  shepherdStartupDestination,
 } from "../src/prompts.js";
 
 function pane({
@@ -181,10 +190,10 @@ test("14-18-M2 initial plus dynamic plus focused plus empty tab cases keep Dev e
 test("14-18-M2 Sheepdog startup named destinations for grazer plus sheep plus shearer categories within cap", () => {
   assert.match(
     SHEEPDOG_PROMPT,
-    /startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab/,
+    /startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the per-role cap/,
   );
-  assert.match(SHEEPDOG_PROMPT, /pre-create default minimal/);
-  assert.match(SHEEPDOG_PROMPT, /starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the current tab with overflow to a new tab/);
+  assert.match(SHEEPDOG_PROMPT, /role tabs created lazily on first need/);
+  assert.match(SHEEPDOG_PROMPT, /stays alone in its own tab titled Sheepdog plus descriptor with no flock workers/);
 
   assert.equal(nextRoleLabel([], "sheep"), "sheep-1");
   assert.equal(nextRoleLabel(["sheep-1", "sheep-2"], "sheep"), "sheep-3");
@@ -257,6 +266,155 @@ test("14-18-M2 six-step dynamic placement uses the same policy with no separate 
     assert.match(prompt, /Never touch the Dev pane in any tab/);
   }
   assert.match(SHEEPDOG_PROMPT, /six-step placement is reuse-first plus evidence-only with new-tab overflow with cap check plus reuse check plus split plus rename plus tab create plus start/);
-  assert.match(SHEEPDOG_PROMPT, /on cap go to a new tab with indexed role labels and never split a fifth pane/);
+  assert.match(SHEEPDOG_PROMPT, /on cap go to a new indexed role tab and never split beyond the per-role cap/);
   assert.match(SHEEPDOG_PROMPT, /reuse capacity-available managed panes first within the cap/);
+});
+
+test("30-M1 shepherd plus governor startup destinations mirror sheepdog placement with Dev excluded", () => {
+  const room = [pane({ pane_id: "w1K:p1", label: "caller", tab_id: "w1K:t1" })];
+  const shepherdDest = shepherdStartupDestination({ panes: room, tabId: "w1K:t1", existingLabels: ["caller"] });
+  assert.ok(shepherdDest.label.startsWith("grazer-"), "shepherd starts grazers with indexed labels");
+  assert.equal(shepherdDest.action, "split", "room means split");
+
+  const governorSheepdog = governorStartupDestination({
+    panes: room,
+    tabId: "w1K:t1",
+    roleCategory: "sheepdog",
+    existingLabels: ["caller"],
+  });
+  assert.ok(governorSheepdog.label.startsWith("Sheepdog-"), "governor sheepdog uses indexed Sheepdog labels");
+  assert.equal(governorSheepdog.action, "split", "room means split");
+
+  const governorGrazer = governorStartupDestination({
+    panes: room,
+    tabId: "w1K:t1",
+    roleCategory: "grazer",
+    existingLabels: ["caller"],
+  });
+  assert.ok(governorGrazer.label.startsWith("grazer-"), "governor grazer uses indexed grazer labels");
+
+  const full = [
+    pane({ pane_id: "w1K:p1", label: "caller" }),
+    pane({ pane_id: "w1K:p2", label: "sheep-1" }),
+    pane({ pane_id: "w1K:p3", label: "sheep-2" }),
+    pane({ pane_id: "w1K:p4", label: "grazer-1" }),
+  ];
+  assert.equal(shepherdStartupDestination({ panes: full, tabId: "w1K:t1", existingLabels: [] }).action, "new-tab");
+  assert.equal(
+    governorStartupDestination({ panes: full, tabId: "w1K:t1", roleCategory: "sheepdog", existingLabels: [] }).action,
+    "new-tab",
+  );
+
+  const withDev = [...room, devPane({ pane_id: "w1K:pDev" })];
+  const devExcluded = governorStartupDestination({
+    panes: withDev,
+    tabId: "w1K:t1",
+    roleCategory: "sheepdog",
+    existingLabels: ["caller"],
+    reuseCandidateId: "w1K:pDev",
+  });
+  assert.notEqual(devExcluded.paneId, "w1K:pDev", "Dev never reused for startup");
+});
+
+test("32-M1 dedicated role tabs keep the caller tab sacred with quadrant geometry and per-role overflow", () => {
+  for (const sentence of ROLE_TAB_POLICY_SENTENCES) {
+    assert.equal(typeof sentence, "string");
+    for (const [name, prompt] of [
+      ["shepherd", SHEPHERD_PROMPT],
+      ["shepherd-governor", SHEPHERD_GOVERNOR_PROMPT],
+      ["sheepdog", SHEEPDOG_PROMPT],
+    ]) {
+      assert.ok(prompt.includes(sentence), `${name} must contain role-tab sentence: ${sentence}`);
+    }
+  }
+  for (const [name, prompt] of [
+    ["shepherd", SHEPHERD_PROMPT],
+    ["shepherd-governor", SHEPHERD_GOVERNOR_PROMPT],
+    ["sheepdog", SHEEPDOG_PROMPT],
+  ]) {
+    assert.ok(prompt.includes(ROLE_TAB_POLICY_PARAGRAPH), `${name} must contain the role-tab paragraph verbatim`);
+  }
+
+  assert.equal(roleTabCapFor("sheepdog"), 1);
+  assert.equal(roleTabCapFor("grazer"), 4);
+  assert.equal(roleTabCapFor("sheep"), 4);
+  assert.equal(roleTabCapFor("shearer-low"), 2);
+  assert.equal(roleTabCapFor("shearer-medium"), 2);
+  assert.equal(roleTabBaseLabel("sheepdog"), "Sheepdog");
+  assert.equal(roleTabBaseLabel("grazer"), "grazers");
+  assert.equal(roleTabBaseLabel("sheep"), "sheep");
+  assert.equal(roleTabBaseLabel("shearer-low"), "shearers");
+  assert.equal(nextRoleTabLabel([], "grazer"), "grazers");
+  assert.equal(nextRoleTabLabel(["grazers"], "grazer"), "grazers-2");
+  assert.equal(nextRoleTabLabel(["grazers", "grazers-2"], "grazer"), "grazers-3");
+  assert.deepEqual(roleTabGeometry("sheepdog"), { panes: 1, steps: [] });
+  assert.equal(roleTabGeometry("grazer").panes, 4);
+  assert.equal(roleTabGeometry("sheep").panes, 4);
+  assert.deepEqual(roleTabGeometry("shearer-low"), { panes: 2, steps: ["split right once"] });
+
+  const tabs = [
+    { tab_id: "w1K:t0", label: "1" },
+    { tab_id: "w1K:t1", label: "Sheepdog" },
+    { tab_id: "w1K:t2", label: "grazers" },
+  ];
+  const panes = [
+    pane({ pane_id: "w1K:p0", tab_id: "w1K:t0", label: "caller" }),
+    pane({ pane_id: "w1K:p9", tab_id: "w1K:t1", label: "Sheepdog" }),
+    pane({ pane_id: "w1K:p1", tab_id: "w1K:t2", label: "grazer-1" }),
+  ];
+  const roomy = sheepdogRoleTabDestination({ roleCategory: "grazer", tabs, panes, callerTabId: "w1K:t0" });
+  assert.equal(roomy.tabLabel, "grazers");
+  assert.equal(roomy.action, "split");
+  assert.notEqual(roomy.tabLabel, "1", "never places on the caller tab");
+
+  const reuse = sheepdogRoleTabDestination({
+    roleCategory: "grazer",
+    tabs,
+    panes,
+    reuseCandidateId: "w1K:p1",
+    callerTabId: "w1K:t0",
+  });
+  assert.equal(reuse.action, "reuse");
+  assert.equal(reuse.paneId, "w1K:p1");
+
+  const callerCandidate = sheepdogRoleTabDestination({
+    roleCategory: "grazer",
+    tabs,
+    panes,
+    reuseCandidateId: "w1K:p0",
+    callerTabId: "w1K:t0",
+  });
+  assert.notEqual(callerCandidate.tabLabel, "1", "a caller-tab candidate never satisfies role reuse");
+
+  const sheepDest = sheepdogRoleTabDestination({ roleCategory: "sheep", tabs, panes, callerTabId: "w1K:t0" });
+  assert.equal(sheepDest.action, "new-tab");
+  assert.equal(sheepDest.tabLabel, "sheep");
+
+  const fullPanes = [
+    ...panes,
+    pane({ pane_id: "w1K:p2", tab_id: "w1K:t2", label: "grazer-2" }),
+    pane({ pane_id: "w1K:p3", tab_id: "w1K:t2", label: "grazer-3" }),
+    pane({ pane_id: "w1K:p4", tab_id: "w1K:t2", label: "grazer-4" }),
+  ];
+  const overflow = sheepdogRoleTabDestination({
+    roleCategory: "grazer",
+    tabs,
+    panes: fullPanes,
+    callerTabId: "w1K:t0",
+  });
+  assert.equal(overflow.action, "new-tab");
+  assert.equal(overflow.tabLabel, "grazers-2");
+
+  const devInRoleTab = [
+    ...panes,
+    devPane({ pane_id: "w1K:pDev", tab_id: "w1K:t2" }),
+  ];
+  const devReuse = sheepdogRoleTabDestination({
+    roleCategory: "grazer",
+    tabs,
+    panes: devInRoleTab,
+    reuseCandidateId: "w1K:pDev",
+    callerTabId: "w1K:t0",
+  });
+  assert.notEqual(devReuse.paneId, "w1K:pDev", "Dev never reused for role placement");
 });

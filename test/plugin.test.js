@@ -737,10 +737,9 @@ test("14-18-M1 pane layout survives plugin config with leaves unchanged", async 
     assert.equal(config.agent.shepherd.permission.bash[key], "allow", `plugin shepherd keeps ${key} for per-tab overflow`);
   }
   assert.equal(config.agent.shepherd.permission.bash["herdr pane close*"], undefined, "plugin shepherd keeps no close");
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
-    assert.equal(config.agent["shepherd-governor"].permission.bash[key], "allow", `plugin shepherd-governor keeps ${key} for single Sheepdog pane`);
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+    assert.equal(config.agent["shepherd-governor"].permission.bash[key], "allow", `plugin shepherd-governor keeps ${key} for Sheepdog pane with per-tab overflow`);
   }
-  assert.equal(config.agent["shepherd-governor"].permission.bash["herdr tab create*"], undefined, "plugin governor keeps no tab create");
   assert.equal(config.agent["shepherd-governor"].permission.bash["herdr pane close*"], undefined, "plugin governor keeps no close");
   const sheepdogBash = config.agent.sheepdog.permission.bash;
   for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
@@ -803,8 +802,8 @@ test("14-18-M1 pane layout single normative wording with Dev exclusion from sour
   ]) {
     assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes(required), `shared pane paragraph must include ${required}`);
   }
-  assert.ok(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd manages its single Sheepdog pane"));
-  assert.ok(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd-governor manages its single Sheepdog pane"));
+  assert.ok(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd manages scan plus placement"));
+  assert.ok(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd-governor manages scan plus placement"));
   assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("sheepdog manages flock panes"));
   assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium"));
 });

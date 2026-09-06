@@ -9,6 +9,8 @@ import {
   PANE_CAP,
   PANE_POLICY_SHARED_PARAGRAPH,
   PANE_POLICY_SHARED_SENTENCES,
+  ROLE_TAB_POLICY_PARAGRAPH,
+  ROLE_TAB_POLICY_SENTENCES,
   SHEEP_PROMPT,
   SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH,
   SHEEPDOG_PROMPT,
@@ -52,17 +54,18 @@ test("14-18-M2 shared paragraph present verbatim in every spawning prompt", () =
 
 test("14-18-M2 role-specific ownership plus capacity plus grouping plus startup differs per role", () => {
   assert.ok(SHEPHERD_PROMPT.includes(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH));
-  assert.ok(SHEPHERD_PROMPT.includes("shepherd manages its single Sheepdog pane scan plus placement plus rename plus tab create only"));
-  assert.ok(SHEPHERD_PROMPT.includes("starts its grazer in a sibling pane of the current tab with overflow to a new tab"));
+  assert.ok(SHEPHERD_PROMPT.includes("shepherd manages scan plus placement plus rename plus tab create and never closes"));
+  assert.ok(SHEPHERD_PROMPT.includes("starts its grazers in dedicated grazers role tabs and never places panes on the calling tab"));
 
   assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH));
-  assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("shepherd-governor manages its single Sheepdog pane scan plus placement plus rename only"));
-  assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("starts its sheepdog in a dedicated sibling Sheepdog pane of the current tab"));
+  assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("shepherd-governor manages scan plus placement plus rename plus tab create and never closes flock panes"));
+  assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("starts its sheepdog alone in its own tab titled Sheepdog plus descriptor"));
 
   assert.ok(SHEEPDOG_PROMPT.includes(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH));
-  assert.ok(SHEEPDOG_PROMPT.includes("sheepdog manages flock panes scan plus placement plus rename plus close plus tab create up to the per-tab cap"));
+  assert.ok(SHEEPDOG_PROMPT.includes("sheepdog manages flock panes scan plus placement plus rename plus close plus tab create across dedicated role tabs"));
   assert.ok(SHEEPDOG_PROMPT.includes("only the creator may rename plus close its panes"));
-  assert.ok(SHEEPDOG_PROMPT.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab"));
+  assert.ok(SHEEPDOG_PROMPT.includes("stays alone in its own tab titled Sheepdog plus descriptor with no flock workers"));
+  assert.ok(SHEEPDOG_PROMPT.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the per-role cap"));
   assert.ok(SHEEPDOG_PROMPT.includes("six-step placement is reuse-first plus evidence-only with new-tab overflow"));
 
   assert.ok(!SHEPHERD_PROMPT.includes(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH));
@@ -80,10 +83,14 @@ test("14-18-M2 leaves stay unchanged with no pane policy", () => {
     ["shearer", SHEARER_REVIEW_PROMPT],
   ]) {
     assert.ok(!prompt.includes(PANE_POLICY_SHARED_PARAGRAPH), `${name} must not contain the shared pane paragraph`);
+    assert.ok(!prompt.includes(ROLE_TAB_POLICY_PARAGRAPH), `${name} must not contain the role-tab paragraph`);
     for (const sentence of PANE_POLICY_SHARED_SENTENCES) {
       assert.ok(!prompt.includes(sentence), `${name} must not contain shared sentence: ${sentence}`);
     }
-    assert.ok(!prompt.includes("manages its single Sheepdog pane"));
+    for (const sentence of ROLE_TAB_POLICY_SENTENCES) {
+      assert.ok(!prompt.includes(sentence), `${name} must not contain role-tab sentence: ${sentence}`);
+    }
+    assert.ok(!prompt.includes("manages scan plus placement"));
     assert.ok(!prompt.includes("manages flock panes"));
   }
 });
