@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 
 import { createAgents } from "../src/agents.js";
 import { RESPONSE_MATRIX } from "../src/response.js";
@@ -89,8 +88,7 @@ test("14-18-M2 leaves stay unchanged with no pane policy", () => {
   }
 });
 
-test("14-18-M2 prompts cite the same normative wording as the README pane policy", () => {
-  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+test("14-18-M2 prompts carry the normative pane wording from shared source exports", () => {
   for (const fragment of [
     "at most four panes per tab",
     "use indexed overflow instead",
@@ -103,12 +101,17 @@ test("14-18-M2 prompts cite the same normative wording as the README pane policy
     "never rely on another client focused pane",
     "reuse the current pane via --pane plus --current",
   ]) {
-    assert.ok(readme.includes(fragment), `README pane policy must contain: ${fragment}`);
+    assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes(fragment), `shared pane paragraph must contain: ${fragment}`);
   }
   for (const sentence of PANE_POLICY_SHARED_SENTENCES) {
-    assert.ok(readme.includes(sentence), `README M2 docs must pin shared sentence verbatim: ${sentence}`);
+    assert.ok(
+      SHEPHERD_PROMPT.includes(sentence) &&
+        SHEPHERD_GOVERNOR_PROMPT.includes(sentence) &&
+        SHEEPDOG_PROMPT.includes(sentence),
+      `spawning prompts must pin shared sentence verbatim: ${sentence}`,
+    );
   }
-  assert.ok(readme.includes(PANE_POLICY_SHARED_PARAGRAPH.slice(0, 80)));
+  assert.ok(SHEPHERD_PROMPT.includes(PANE_POLICY_SHARED_PARAGRAPH.slice(0, 80)));
 });
 
 test("14-18-M2 spawn plus response plus state matrices intact with no new spawn targets", () => {
