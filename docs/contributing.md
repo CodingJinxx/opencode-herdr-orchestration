@@ -5,7 +5,11 @@ layout: default
 
 # Contributing
 
-Short placeholder for the contributing guide. Full content arrives in a later docs task.
+Run `npm run check` for syntax validation followed by `npm test` for the Node test suite, and use `node bin/orchestration.js doctor` as a read-only launcher diagnostic that reports without changing state; the suite under `test/` exercises agents, permissions, response handling, state storage, steering and ownership, project configuration, launcher diagnostics, and hook behavior, so consult the test files themselves for the current coverage rather than a fixed list.
+
+## Pull requests
+
+Keep changes scoped to the task, preserve unrelated work, and inspect `git diff` plus `git status` before committing. Report the checks run and their results in the pull request, and leave delivery actions such as pushes, merges, and releases to maintainers.
 
 ## Docs navigation
 
