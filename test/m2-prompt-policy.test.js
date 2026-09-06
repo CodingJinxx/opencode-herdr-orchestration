@@ -52,18 +52,18 @@ test("14-18-M2 shared paragraph present verbatim in every spawning prompt", () =
 
 test("14-18-M2 role-specific ownership plus capacity plus grouping plus startup differs per role", () => {
   assert.ok(SHEPHERD_PROMPT.includes(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH));
-  assert.ok(SHEPHERD_PROMPT.includes("shepherd manages its single Sheepdog pane scan plus placement plus rename only"));
-  assert.ok(SHEPHERD_PROMPT.includes("starts its grazer in a sibling pane of the current tab"));
+  assert.ok(SHEPHERD_PROMPT.includes("shepherd manages its single Sheepdog pane scan plus placement plus rename plus tab create only"));
+  assert.ok(SHEPHERD_PROMPT.includes("starts its grazer in a sibling pane of the current tab with overflow to a new tab"));
 
   assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH));
   assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("shepherd-governor manages its single Sheepdog pane scan plus placement plus rename only"));
   assert.ok(SHEPHERD_GOVERNOR_PROMPT.includes("starts its sheepdog in a dedicated sibling Sheepdog pane of the current tab"));
 
   assert.ok(SHEEPDOG_PROMPT.includes(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH));
-  assert.ok(SHEEPDOG_PROMPT.includes("sheepdog manages flock panes scan plus placement plus rename plus close up to the cap"));
+  assert.ok(SHEEPDOG_PROMPT.includes("sheepdog manages flock panes scan plus placement plus rename plus close plus tab create up to the per-tab cap"));
   assert.ok(SHEEPDOG_PROMPT.includes("only the creator may rename plus close its panes"));
-  assert.ok(SHEEPDOG_PROMPT.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap"));
-  assert.ok(SHEEPDOG_PROMPT.includes("six-step placement is single-tab plus reuse-first plus evidence-only"));
+  assert.ok(SHEEPDOG_PROMPT.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab"));
+  assert.ok(SHEEPDOG_PROMPT.includes("six-step placement is reuse-first plus evidence-only with new-tab overflow"));
 
   assert.ok(!SHEPHERD_PROMPT.includes(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH));
   assert.ok(!SHEPHERD_PROMPT.includes(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH));
@@ -91,13 +91,16 @@ test("14-18-M2 leaves stay unchanged with no pane policy", () => {
 test("14-18-M2 prompts carry the normative pane wording from shared source exports", () => {
   for (const fragment of [
     "at most four panes per tab",
-    "use indexed overflow instead",
+    "Reuse first within the four-pane cap per tab",
+    "overflow to a new tab instead",
+    "Overflow to a new tab with indexed role labels when the cap binds.",
     "tabs keep their existing labels",
     "Reuse the matching pane when found",
     "Never derive IDs from sidebar order or examples",
     "excluded from every scan plus split plus placement plus rename plus close plus reuse",
     "Never count it toward the four-pane cap",
-    "Never create a workspace or tab to evade the cap",
+    "Never create a workspace to evade the cap",
+    "Never touch the Dev pane in any tab.",
     "never rely on another client focused pane",
     "reuse the current pane via --pane plus --current",
   ]) {
