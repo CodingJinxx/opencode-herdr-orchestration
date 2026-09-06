@@ -489,7 +489,7 @@ test("steering exposes no herdr steer CLI and no package CLI steering command", 
   assert.doesNotMatch(binText, /herdr\s+steer/i, "bin CLI must not implement herdr steer");
   assert.doesNotMatch(binText, /["']steer["']/i, "bin CLI must not implement a steer command");
   const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.deepEqual(Object.keys(packageJson.bin ?? {}), ["opencode-herdr-orchestration"]);
+  assert.deepEqual(Object.keys(packageJson.bin ?? {}), ["flocky"]);
   for (const script of Object.values(packageJson.scripts ?? {})) {
     assert.doesNotMatch(String(script), /herdr\s+steer/i, "package scripts must not invoke herdr steer");
   }
