@@ -28,14 +28,14 @@ jobs:
       - run: npm test
       - run: npm pack --dry-run
       - name: Verify publish manifest
-        run: node -e "const p=require('./package.json'); if (p.bin['opencode-herdr-orchestration'] !== 'bin/orchestration.js') process.exit(1)"
+        run: node -e "const p=require('./package.json'); if (p.bin['flocky'] !== 'bin/orchestration.js') process.exit(1)"
       - name: Verify packed CLI
         shell: bash
         run: |
           set -euo pipefail
           package="$(npm pack --silent)"
           npm install --global "$package"
-          opencode-herdr-orchestration status
+          flocky status
 
   gate:
     name: CI

@@ -206,7 +206,7 @@ try {
   else if (command === "status") fullStatus();
   else if (command === "doctor") runDoctor();
   else {
-    process.stderr.write("Usage: opencode-herdr-orchestration <install|update|configure-agents|status|doctor|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
+    process.stderr.write("Usage: flocky <install|update|configure-agents|status|doctor|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
     process.exitCode = 2;
   }
 } catch (error) {

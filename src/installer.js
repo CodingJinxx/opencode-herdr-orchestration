@@ -13,7 +13,7 @@ import {
   steerCommandEntry as steerEntry,
 } from "./steer.js";
 
-export const PACKAGE_NAME = "opencode-herdr-orchestration";
+export const PACKAGE_NAME = "@ia-forge/flocky";
 const NPM_COMMAND = "npm";
 const OPENCODE_COMMAND = "opencode";
 export const AGENT_NAMES = [
