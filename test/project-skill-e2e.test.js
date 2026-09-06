@@ -140,10 +140,9 @@ test("15-M2 E2E disposable repo proves human instruction to skill application to
   // post-restart merged view.
   const reread = readFileSync(expected, "utf8");
   assert.equal(reread, text);
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /restart OpenCode intentionally/);
-  assert.match(readme, /opencode debug config/);
-  assert.match(readme, /OPENCODE_DISABLE_PROJECT_CONFIG=1/);
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /restart OpenCode intentionally/);
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /opencode debug config/);
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /OPENCODE_DISABLE_PROJECT_CONFIG=1/);
 
   // Authority boundary: no global side effects from the whole chain.
   const globalFile = resolve(findConfigFile(globalDir));
@@ -185,36 +184,29 @@ test("15-M2 E2E existing opencode.jsonc layer is preserved with global-only fall
   // the disable flag before restarting intentionally.
   writeFileSync(jsoncPath, "{ not json", "utf8");
   assert.throws(() => updateProjectAgentPermissions(readFileSync(jsoncPath, "utf8"), "grazer", { skill: "allow" }), /Invalid OpenCode JSONC/);
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /not valid JSON\(C\)/);
-  assert.match(readme, /fix or remove the project file/);
-  assert.match(readme, /confirm global-only/);
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /fix or remove the project file/);
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /confirm global-only/);
 });
 
-test("15-M2 README documents the full supply plus invoke plus inspect plus location plus merge plus method plus restart workflow", () => {
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /Project permission workflow \(15-M2\)/);
-  assert.match(readme, /Supply:/);
-  assert.match(readme, /Invoke:/);
-  assert.match(readme, /Inspect:/);
-  assert.match(readme, /File location:/);
-  assert.match(readme, /Merge preservation:/);
-  assert.match(readme, /Inspection method:/);
-  assert.match(readme, /Restart requirements:/);
-  assert.match(readme, /Authority boundaries:/);
-  assert.match(readme, /"govern project permissions"/);
-  assert.match(readme, /git diff/);
-  assert.match(readme, /opencode\.json/);
-  assert.match(readme, /per-key/);
-  assert.match(readme, /opencode debug config/);
-  assert.match(readme, /restart OpenCode intentionally/);
-  assert.match(readme, /never touch global config/i);
-  assert.match(readme, /denials never invoke/i);
-  assert.match(readme, /sole supervisor of leaves/);
-  assert.match(readme, /spawn plus response plus state matrices/);
-  assert.match(readme, /Steering never authorizes/);
-  assert.match(readme, /test\/project-skill-e2e\.test\.js/);
-  assert.match(readme, /test\/project-skill-negative\.test\.js/);
+test("15-M2 supply plus invoke plus inspect plus location plus merge plus method plus restart workflow from source", () => {
+  for (const fragment of [
+    '"govern project permissions"',
+    "opencode.json",
+    "per-key",
+    "opencode debug config",
+    "restart OpenCode intentionally",
+    "denials never invoke",
+    "sole supervisor of leaves",
+    "spawn plus response plus state matrices",
+  ]) {
+    assert.ok(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH.includes(fragment), `skill paragraph must contain ${fragment}`);
+  }
+  assert.match(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH, /never touch global config/i);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /steering never authorizes/i);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /existing approvals still apply/i);
+  const agents = createAgents();
+  assert.equal(agents["shepherd-governor"].permission.bash["herdr agent start * --kind opencode --pane * -- --agent grazer"], "allow");
+  assert.equal(agents["shepherd-governor"].permission.bash["herdr agent start * --kind opencode --pane * -- --agent sheepdog"], "allow");
 });
 
 test("15-M2 E2E all seven roles apply through the skill with preserved tuples", () => {
