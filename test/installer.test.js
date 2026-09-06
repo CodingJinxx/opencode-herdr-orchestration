@@ -659,20 +659,36 @@ test("15-M1 project helpers target all seven roles and reapply idempotently", ()
   assert.ok(third.backup && existsSync(third.backup));
 });
 
-test("15-M1 README documents reload via debug config with global-only fallback", () => {
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /Project permission skill \(15-M1\)/);
-  assert.match(readme, /opencode\.json/);
-  assert.match(readme, /opencode debug config/);
-  assert.match(readme, /OPENCODE_DISABLE_PROJECT_CONFIG=1/);
-  assert.match(readme, /restart OpenCode intentionally/);
-  assert.match(readme, /"govern project permissions"/);
-  assert.match(readme, /git diff/);
-  assert.match(readme, /denials never invoke/i);
-  assert.match(readme, /prompt-embedded/);
-  assert.match(readme, /SKILL\.md/);
-  assert.match(readme, /PROJECT_CONFIG_FILE/);
-  assert.match(readme, /GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH/);
+test("15-M1 project reload stays verifiable via temp fixtures with global-only fallback", () => {
+  assert.equal(PROJECT_CONFIG_FILE, "opencode.json");
+  assert.ok(PROJECT_CONFIG_FILENAMES.includes("opencode.json"));
+  assert.ok(PROJECT_CONFIG_FILENAMES.includes("opencode.jsonc"));
+  for (const fragment of [
+    "opencode.json",
+    "opencode debug config",
+    "OPENCODE_DISABLE_PROJECT_CONFIG=1",
+    "restart OpenCode intentionally",
+    '"govern project permissions"',
+    "denials never invoke",
+    "prompt-embedded",
+    "SKILL.md",
+  ]) {
+    assert.ok(GOVERNOR_PROJECT_PERMISSION_SKILL_PARAGRAPH.includes(fragment), `skill paragraph must contain ${fragment}`);
+  }
+  const projectRoot = mkdtempSync(join(tmpdir(), "orchestration-installer-reload-"));
+  const applied = writeProjectAgentPermissions(projectRoot, "sheepdog", { bash: { "echo reload-probe-*": "allow" } });
+  assert.ok(resolve(applied.file).startsWith(resolve(projectRoot)));
+  assert.equal(findProjectConfigFile(projectRoot), resolve(projectRoot, PROJECT_CONFIG_FILE));
+  const text = readFileSync(applied.file, "utf8");
+  assert.doesNotThrow(() => parse(text, [], { allowTrailingComma: true }));
+  assert.throws(() => updateProjectAgentPermissions("{ not json", "sheepdog", { bash: "allow" }), /Invalid OpenCode JSONC/);
+  const base = createAgents().sheepdog.permission.bash;
+  const parsed = parse(text);
+  const merged = { ...base, ...parsed.agent.sheepdog.permission.bash };
+  assert.equal(merged["echo reload-probe-*"], "allow");
+  assert.equal(merged["herdr agent prompt*"], "allow");
+  const globalDir = resolve(configDirectory());
+  assert.ok(!resolve(applied.file).startsWith(globalDir));
 });
 
 test("15-M1 Governor skill stays prompt-embedded with trigger plus preservation plus inspectability", () => {
