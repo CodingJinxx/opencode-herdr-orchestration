@@ -106,7 +106,7 @@ For workarounds, launcher resolution, integration checks, interrupted-operation 
 
 ## Docs
 
-Start with [Getting Started](docs/getting-started.md) for install plus update plus migration, then use the guides below for daily work. Detail lives in docs so this landing page stays short.
+Start with [Getting Started](docs/getting-started.md) for install plus update plus migration, then use the guides below for daily work. Detail lives in docs so this landing page stays short. Published site: https://codingjinxx.github.io/opencode-herdr-orchestration/
 
 - [Home](docs/index.md) — docs landing with navigation to every guide.
 - [Getting Started](docs/getting-started.md) — install, update, manual setup, stale file migration, and verify steps.
