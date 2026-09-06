@@ -5,7 +5,7 @@ layout: default
 
 # Getting Started
 
-This guide installs the `opencode-herdr-orchestration` package, updates it safely, and removes leftover agent files from the previous architecture. For the full command list, see [CLI Reference](./cli-reference.html).
+This guide installs the `@ia-forge/flocky` package, updates it safely, and removes leftover agent files from the previous architecture. For the full command list, see [CLI Reference](./cli-reference.html).
 
 Live-verified versions used below were checked before printing: package `0.3.2`, OpenCode `1.18.29`, Herdr `0.8.2`, Herdr channel `stable`, integration `opencode: current (v10)`, Node.js `>=20` (host reported `v24.19.0`). When any version below disagrees with `opencode --version`, `node bin/orchestration.js status`, or `node bin/orchestration.js doctor`, trust the live command output.
 
@@ -20,13 +20,13 @@ Default model choices presented during setup are the shepherd phases inheriting 
 For most machines the cross-platform installer is the supported path:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest install
+npx -y @ia-forge/flocky@latest install
 ```
 
 To include the shared Git push policy in the same step, add the hooks flag:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest install --with-hooks
+npx -y @ia-forge/flocky@latest install --with-hooks
 ```
 
 During `install` the tool locates the global OpenCode config directory, installs that exact package version there, prompts for shepherd plus sheepdog plus worker plus reviewer model choices, preserves JSONC comments plus trailing commas plus existing plugins plus tuple options, records the stable file entry current OpenCode plugin loading requires, writes timestamped backups of touched config plus npm manifest files, and validates every agent role through a short-lived OpenCode debug run. The run never stops or signals a running OpenCode process.
@@ -40,9 +40,9 @@ OpenCode reads plugins plus agents only at startup. After every install, update,
 Never hand-edit the global config while an OpenCode process that depends on it is running. Complete or stop dependent processes first, then run:
 
 ```bash
-npx -y opencode-herdr-orchestration@latest update
-npx -y opencode-herdr-orchestration@latest configure-agents
-npx -y opencode-herdr-orchestration@latest status
+npx -y @ia-forge/flocky@latest update
+npx -y @ia-forge/flocky@latest configure-agents
+npx -y @ia-forge/flocky@latest status
 ```
 
 The `update` step resolves the newest published version, installs it exactly, preserves comments plus tuples, creates fresh backups, revalidates all roles, and restores the previous config when validation fails. The `configure-agents` step revisits the same model prompts later: press Enter to keep the displayed value or enter `-` to return that role to its package default. The `status` step reports the CLI version, installed version, latest version, configured file, detected agents, and obsolete files so the operator can confirm whether another restart is needed.
@@ -56,7 +56,7 @@ When the automated installer is unavailable, add the published package to `~/.co
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-herdr-orchestration"]
+  "plugin": ["@ia-forge/flocky"]
 }
 ```
 
@@ -64,7 +64,7 @@ When a `plugin` list already exists, append the package name rather than replaci
 
 ```bash
 cd ~/.config/opencode
-npm install --save-exact opencode-herdr-orchestration@latest
+npm install --save-exact @ia-forge/flocky@latest
 ```
 
 Current OpenCode releases may record but not execute an npm plugin referenced only by bare package name. When that happens, keep the installed package in place and use its installed entry path in a plugin tuple instead:
@@ -72,7 +72,7 @@ Current OpenCode releases may record but not execute an npm plugin referenced on
 ```jsonc
 {
   "plugin": [
-    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js"
+    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/@ia-forge/flocky/src/plugin.js"
   ]
 }
 ```
@@ -107,8 +107,8 @@ From the global config directory, the following checks confirm a healthy install
 
 ```bash
 opencode agent list
-npx -y opencode-herdr-orchestration@latest status
-npx -y opencode-herdr-orchestration@latest doctor
+npx -y @ia-forge/flocky@latest status
+npx -y @ia-forge/flocky@latest doctor
 ```
 
 The agent list shows all seven packaged roles. The status output shows matching installed plus latest package versions with agents ready. The doctor output reports launcher candidates plus agreement plus spawn probe plus `opencode: current (v10)` integration presence plus flapping signals as JSON with a human summary. Full option details plus hook management live in [CLI Reference](./cli-reference.html).
