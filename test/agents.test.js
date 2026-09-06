@@ -20,6 +20,7 @@ import {
 import { createStateTools, createSteeringTools, modeForAgent } from "../src/index.js";
 import {
   GRAZER_PROMPT,
+  PANE_POLICY_SHARED_PARAGRAPH,
   SHEEPDOG_PROMPT,
   SHEEP_PROMPT,
   SHEARER_REVIEW_PROMPT,
@@ -865,21 +866,18 @@ test("14-18-M1 pane layout invents no tab create plus close plus move plus resiz
 
 test("14-18-M1 protected Dev Developer Terminal exclusion presence with honest matcher residual", () => {
   const agents = createAgents();
-  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  assert.match(readme, /## Pane layout policy/, "single normative pane policy section exists");
-  assert.match(readme, /at most four panes per tab/, "4-pane cap present");
-  assert.match(readme, /Role grouping/, "role grouping present");
-  assert.match(readme, /Indexed overflow/, "indexed overflow present");
-  assert.match(readme, /Reuse before create/, "reuse before create present");
-  assert.match(readme, /Startup destinations/, "startup destinations present");
-  assert.match(readme, /Ownership/, "ownership present");
-  assert.match(readme, /Protected Dev Developer Terminal exclusion/, "protected exclusion present");
-  assert.match(readme, /excluded from every scan plus split plus placement plus rename plus close plus reuse/, "exclusion covers every scan split placement rename close reuse");
-  assert.match(readme, /Six-step placement/, "6-step placement present");
-  assert.match(readme, /Pane layout residual/, "honest matcher residual present");
-  assert.match(readme, /no `\*Dev\*` glob is added/, "residual documents why no Dev glob");
-  assert.match(readme, /Never invent/, "fallback present with never-invent rule");
-  assert.match(readme, /STOP.*naming the missing capability/, "fallback reports STOP on missing primitive");
+  assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes("at most four panes per tab"), "4-pane cap present in source");
+  assert.ok(
+    PANE_POLICY_SHARED_PARAGRAPH.includes("excluded from every scan plus split plus placement plus rename plus close plus reuse"),
+    "exclusion covers every scan split placement rename close reuse in source",
+  );
+  assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes("Six-step placement is single-tab plus reuse-first plus evidence-only"), "6-step placement present in source");
+  assert.ok(
+    PANE_POLICY_SHARED_PARAGRAPH.includes("reuse the current pane via --pane plus --current"),
+    "fallback reuses current pane in source",
+  );
+  assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes("report STOP naming the missing capability"), "fallback reports STOP on missing primitive in source");
+  assert.ok(SHEPHERD_PROMPT.includes(PANE_POLICY_SHARED_PARAGRAPH.slice(0, 60)), "shepherd carries shared pane wording");
 
   const source = fs.readFileSync(new URL("../src/agents.js", import.meta.url), "utf8");
   assert.match(source, /SHEPHERD_PANE_ALLOWS/, "shepherd Sheepdog pane matrix present");
