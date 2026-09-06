@@ -1,6 +1,6 @@
 {
   "name": "@ia-forge/flocky",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Capability-separated Herdr orchestration agents for OpenCode",
   "author": "CodingJinxx",
   "repository": {
