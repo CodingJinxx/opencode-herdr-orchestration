@@ -11,7 +11,7 @@ import spawn from "cross-spawn";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { platform } from "node:os";
-import { basename, delimiter } from "node:path";
+import { delimiter, join } from "node:path";
 
 export const DOCTOR_ANCHORS = Object.freeze([
   "#installation",
@@ -40,7 +40,7 @@ export function classifyLauncher(source) {
   const value = normalizeSource(source);
   if (!value) return { source: value, kind: "unknown" };
   const lower = value.toLowerCase().replaceAll("/", "\\");
-  const base = basename(value).toLowerCase();
+  const base = value.split(/[\\/]/).pop().toLowerCase();
   if (base === "opencode.cmd") return { source: value, kind: "shim-cmd" };
   if (base === "opencode.ps1") return { source: value, kind: "shim-ps1" };
   if (base === "opencode" || base === "opencode.sh") return { source: value, kind: "extensionless-shim" };
@@ -322,7 +322,7 @@ function collectLiveCandidates(envPath) {
   const names = currentPlatform === "win32" ? ["opencode.cmd", "opencode.ps1", "opencode.exe", "opencode"] : ["opencode"];
   for (const dir of entries) {
     for (const name of names) {
-      const candidate = `${dir.replace(/[\\/]+$/, "")}\\${name}`;
+      const candidate = join(dir.replace(/[\\/]+$/, ""), name);
       try {
         if (existsSync(candidate)) found.push(candidate);
       } catch {}
