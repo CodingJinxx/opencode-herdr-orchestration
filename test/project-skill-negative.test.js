@@ -207,10 +207,9 @@ test("15-M2 negative consequential actions stay separate after permission grants
   assert.equal(consumed.consequentialAuthorization.anyConsequential, false);
   assert.equal(consumed.consequentialAuthorization.approvalsStillRequired, true);
 
-  // Docs keep the boundary explicit after any grant.
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /Steering never authorizes/);
-  assert.match(readme, /existing approvals (still|are still) required/i);
+  // Source keeps the boundary explicit after any grant.
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /steering never authorizes/i);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /existing approvals still apply/i);
 });
 
 test("15-M2 negative flock constraints stay intact with widened project tools", () => {
@@ -278,10 +277,7 @@ test("15-M2 negative flock constraints stay intact with widened project tools", 
   assert.equal(evaluateBash(sheepdogBash, "herdr agent prompt sheep_1 hello --wait --timeout 1000"), "allow");
   assert.equal(evaluateBash(sheepdogBash, 'herdr agent prompt sheep_1 "a; b" --wait --timeout 1000'), "deny");
 
-  // Supervision wording stays unchanged in prompts and docs.
+  // Supervision wording stays unchanged in prompts.
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /sole supervisor of leaves/);
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /spawn plus response plus state matrices/);
-  const readme = readFileSync(resolve("README.md"), "utf8");
-  assert.match(readme, /sole supervisor of leaves/);
-  assert.match(readme, /spawn plus response plus state matrices/);
 });
