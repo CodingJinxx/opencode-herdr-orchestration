@@ -31,8 +31,6 @@ jobs:
           test "$tag" = "$package_version"
       - name: Install OIDC-capable npm
         run: npm install --global npm@11.17.0
-      - name: Remove deprecated always-auth config written by setup-node
-        run: sed -i '/always-auth/d' ~/.npmrc || true
       - run: npm ci
       - run: npm run check
       - run: npm test
