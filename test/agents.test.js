@@ -788,11 +788,10 @@ test("14-18-M1 pane layout matrices per ownership role with leaves unchanged", (
   }
   assert.equal(shepherdBash["herdr pane close*"], undefined, "shepherd must not close (single pane, no flock cleanup)");
 
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
-    assert.equal(governorBash[key], "allow", `shepherd-governor must allow ${key} for single Sheepdog pane`);
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+    assert.equal(governorBash[key], "allow", `shepherd-governor must allow ${key} for Sheepdog pane with per-tab overflow`);
   }
-  assert.equal(governorBash["herdr tab create*"], undefined, "governor keeps no tab create");
-  assert.equal(governorBash["herdr pane close*"], undefined, "governor must not close (single pane, no flock cleanup)");
+  assert.equal(governorBash["herdr pane close*"], undefined, "governor must not close (sheepdog owns flock cleanup)");
 
   for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
     assert.equal(sheepdogBash[key], "allow", `sheepdog must allow ${key} for flock panes per tab with new-tab overflow`);
@@ -832,7 +831,7 @@ test("14-18-M1 pane layout evaluation stays effective with separators global las
     assert.equal(m1EvaluateBash(bash, "herdr agent rename issue1418m1sheep sheep-1"), "allow", `${name} agent rename evaluates allow`);
     assert.equal(m1EvaluateBash(bash, "herdr tab list --workspace w1K; rm"), "deny", `${name} separator smuggling stays denied`);
   }
-  for (const [name, bash] of [["shepherd", shepherdBash], ["sheepdog", sheepdogBash]]) {
+  for (const [name, bash] of [["shepherd", shepherdBash], ["shepherd-governor", governorBash], ["sheepdog", sheepdogBash]]) {
     const keys = Object.keys(bash);
     const tabCreate = keys.indexOf("herdr tab create*");
     const sep = keys.indexOf("*;*");
@@ -841,7 +840,6 @@ test("14-18-M1 pane layout evaluation stays effective with separators global las
     assert.equal(m1EvaluateBash(bash, "herdr tab create --workspace w1K"), "allow", `${name} tab create evaluates allow for per-tab overflow`);
     assert.equal(m1EvaluateBash(bash, "herdr tab create --workspace w1K; rm"), "deny", `${name} tab create separator smuggling stays denied`);
   }
-  assert.equal(m1EvaluateBash(governorBash, "herdr tab create --workspace w1K"), "deny", "governor tab create fails closed to deny");
   assert.equal(m1EvaluateBash(sheepdogBash, "herdr pane close w1K:p1"), "allow", "sheepdog pane close evaluates allow for owned flock pane");
   assert.equal(m1EvaluateBash(shepherdBash, "herdr pane close w1K:p1"), "deny", "shepherd pane close fails closed to deny");
   assert.equal(m1EvaluateBash(governorBash, "herdr pane close w1K:p1"), "deny", "governor pane close fails closed to deny");
@@ -849,7 +847,7 @@ test("14-18-M1 pane layout evaluation stays effective with separators global las
 
 test("14-18-M1 pane layout allows tab create for overflow with other tab ops still denied", () => {
   const agents = createAgents();
-  for (const name of ["shepherd", "sheepdog"]) {
+  for (const name of ["shepherd", "shepherd-governor", "sheepdog"]) {
     const bash = agents[name].permission.bash;
     assert.equal(bash["herdr tab create*"], "allow", `${name} must allow tab create for per-tab overflow`);
     assert.equal(m1EvaluateBash(bash, "herdr tab create w1K"), "allow", `${name} tab create evaluates allow`);
@@ -879,7 +877,6 @@ test("14-18-M1 pane layout allows tab create for overflow with other tab ops sti
   }
   const governorBash = agents["shepherd-governor"].permission.bash;
   for (const invented of [
-    "herdr tab create*",
     "herdr tab close*",
     "herdr tab get*",
     "herdr tab focus*",
@@ -898,6 +895,7 @@ test("14-18-M1 pane layout allows tab create for overflow with other tab ops sti
     assert.equal(governorBash[invented], undefined, `shepherd-governor must not invent ${invented}`);
     assert.equal(m1EvaluateBash(governorBash, invented.replace("*", " w1K")), "deny", `${invented} stays denied for shepherd-governor`);
   }
+  assert.equal(governorBash["herdr tab create*"], "allow", "governor allows tab create for per-tab overflow");
   assert.equal(governorBash["herdr pane split*"], "allow", "governor keeps evidenced split for placement");
   assert.equal(governorBash["herdr pane list*"], "allow", "governor keeps evidenced list for scan");
   assert.equal(governorBash["herdr pane layout*"], "allow", "governor keeps evidenced layout for geometry");

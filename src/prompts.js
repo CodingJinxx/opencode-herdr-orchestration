@@ -4,9 +4,37 @@
 // Every spawning role carries the same shared sentences; role-specific
 // ownership plus startup destinations differ per role. Leaves stay unchanged.
 // Spawn plus response plus state matrices stay intact with no new spawn targets.
-// Pre-create default stays minimal via reuse of the current pane.
+// Role tabs are created lazily on first need and reused thereafter.
 export const PANE_CAP = 4;
 export const DEV_PANE_LABELS = Object.freeze(["Dev", "Developer Terminal"]);
+// Dedicated role-tab layout: per-role tabs titled at creation, never renamed.
+// Caps per role tab stay within the hard four-pane cap: grazers 4, sheep 4,
+// shearers 2 side by side, sheepdog alone. The shepherd caller tab is sacred
+// and never hosts worker panes.
+export const ROLE_TAB_CAPS = Object.freeze({
+  sheepdog: 1,
+  grazer: 4,
+  sheep: 4,
+  "shearer-low": 2,
+  "shearer-medium": 2,
+});
+export const ROLE_TAB_BASE_LABELS = Object.freeze({
+  sheepdog: "Sheepdog",
+  grazer: "grazers",
+  sheep: "sheep",
+  "shearer-low": "shearers",
+  "shearer-medium": "shearers",
+});
+export const ROLE_TAB_POLICY_SENTENCES = Object.freeze([
+  "dedicated role tabs are titled at creation via tab create label and never renamed.",
+  "Never place worker panes on the shepherd caller tab",
+  "Sheepdog stays alone in its own tab titled Sheepdog plus descriptor with no flock workers.",
+  "Grazer role tabs hold at most four panes in quadrant geometry with overflow to indexed grazers tabs.",
+  "Sheep role tabs hold at most four panes with overflow to indexed sheep tabs.",
+  "Shearer role tabs hold at most two panes side by side with overflow to indexed shearers tabs.",
+  "Four-pane quadrant geometry is split right once then split each side down once parsing each new pane ID from JSON",
+  "Never mix roles within a role tab.",
+]);
 export const PANE_POLICY_SHARED_SENTENCES = Object.freeze([
   "at most four panes per tab including the caller pane",
   "Reuse first within the four-pane cap per tab",
@@ -33,14 +61,17 @@ export const PANE_POLICY_SHARED_SENTENCES = Object.freeze([
 export const PANE_POLICY_SHARED_PARAGRAPH = String.raw`
 Pane layout policy (single normative policy, same wording as docs architecture tab section): Four-pane cap: at most four panes per tab including the caller pane. Reuse first within the four-pane cap per tab. Never split when the filtered count is already four; overflow to a new tab instead. Overflow to a new tab with indexed role labels when the cap binds. Grouped by role with indexed labels (Sheepdog, sheep-1, sheep-2, shearer-low-1, grazer-1); tabs keep their existing labels. Reuse the matching pane when found; split only when no reusable pane exists and the cap permits. Reuse is preferred over clutter: reuse a capacity-available managed pane for the same role before splitting. Never derive IDs from sidebar order or examples; parse them from JSON responses. The pane labeled Dev (Developer Terminal) is excluded from every scan plus split plus placement plus rename plus close plus reuse. Never count it toward the four-pane cap, never list it as a reuse candidate, never split from it or into it, never place a worker there, never rename it, never close it, and never reuse it for overflow. Filter it during scan by terminal_title plus terminal_title_stripped plus label before counting plus reusing; when only the Dev pane would satisfy reuse, treat reuse as absent and either split elsewhere within cap or overflow to a new tab or report STOP with preserved state. Never create a workspace to evade the cap. Never touch the Dev pane in any tab. Start in the calling pane and never rely on another client focused pane. If any primitive below is missing, reuse the current pane via --pane plus --current and report STOP naming the missing capability with preserved state. Pre-create default stays minimal: reuse the current pane via --pane plus --current when primitives are missing. On finish, reuse the pane for the next same-role assignment after confirming idle plus done. Six-step placement is reuse-first plus evidence-only with new-tab overflow. Dynamic placement follows the same single normative pane policy with new-tab overflow and no separate rulebook.
 `.trim();
+export const ROLE_TAB_POLICY_PARAGRAPH = String.raw`
+Role-tab layout policy (single normative role-tab policy, same wording as docs architecture tab section): dedicated role tabs are titled at creation via tab create label and never renamed. Never place worker panes on the shepherd caller tab: scan it only for caller context, then place every worker in its role tab. Sheepdog stays alone in its own tab titled Sheepdog plus descriptor with no flock workers. Grazer role tabs hold at most four panes in quadrant geometry with overflow to indexed grazers tabs. Sheep role tabs hold at most four panes with overflow to indexed sheep tabs. Shearer role tabs hold at most two panes side by side with overflow to indexed shearers tabs. Four-pane quadrant geometry is split right once then split each side down once parsing each new pane ID from JSON; two-pane shearer geometry is split right once. Never mix roles within a role tab. Reuse first within the per-role cap after confirming idle plus done; split only when no reusable same-role pane exists and the per-role cap permits; overflow to a new indexed role tab when the per-role cap binds. Dev exclusion plus evidence-only ID parsing plus no focused-pane reliance apply in every role tab.
+`.trim();
 export const SHEPHERD_PANE_OWNERSHIP_PARAGRAPH = String.raw`
-Shepherd pane ownership plus startup: shepherd manages its single Sheepdog pane scan plus placement plus rename plus tab create only and never closes; starts its grazer in a sibling pane of the current tab with overflow to a new tab with indexed role labels when the cap binds; leaves gain no pane plus tab plus rename commands and stay unchanged.
+Shepherd pane ownership plus startup: shepherd manages scan plus placement plus rename plus tab create and never closes; starts its grazers in dedicated grazers role tabs and never places panes on the calling tab; sheepdog stays alone in its own tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
 `.trim();
 export const GOVERNOR_PANE_OWNERSHIP_PARAGRAPH = String.raw`
-Governor pane ownership plus startup: shepherd-governor manages its single Sheepdog pane scan plus placement plus rename only and never closes flock panes; starts its sheepdog in a dedicated sibling Sheepdog pane of the current tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
+Governor pane ownership plus startup: shepherd-governor manages scan plus placement plus rename plus tab create and never closes flock panes; starts its sheepdog alone in its own tab titled Sheepdog plus descriptor and starts supplementary grazers in dedicated grazers role tabs; never places panes on the calling tab; leaves gain no pane plus tab plus rename commands and stay unchanged.
 `.trim();
 export const SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH = String.raw`
-Sheepdog pane ownership plus startup plus dynamic placement: sheepdog manages flock panes scan plus placement plus rename plus close plus tab create up to the per-tab cap; only the creator may rename plus close its panes and only after commits are integrated or otherwise preserved and the worktree is clean; starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the current tab with overflow to a new tab with indexed role labels when the cap binds grouped by role with indexed labels; startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab with Dev excluded in any tab and pre-create default minimal; six-step placement is reuse-first plus evidence-only with new-tab overflow with cap check plus reuse check plus split plus rename plus tab create plus start; on cap go to a new tab with indexed role labels and never split a fifth pane; reuse capacity-available managed panes first within the cap and reuse the pane on finish after confirming idle plus done; never create a workspace to evade the cap and never touch the Dev pane in any tab.
+Sheepdog pane ownership plus startup plus dynamic placement: sheepdog manages flock panes scan plus placement plus rename plus close plus tab create across dedicated role tabs; only the creator may rename plus close its panes and only after commits are integrated or otherwise preserved and the worktree is clean; stays alone in its own tab titled Sheepdog plus descriptor with no flock workers; starts grazers in grazers tabs up to four panes in quadrant geometry and sheep in sheep tabs up to four panes and shearers in shearers tabs up to two panes side by side with overflow to indexed role tabs when the per-role cap binds; never places panes on the shepherd calling tab and never mixes roles within a role tab; startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the per-role cap with Dev excluded in any tab and role tabs created lazily on first need; six-step placement is reuse-first plus evidence-only with new-tab overflow with cap check plus reuse check plus split plus rename plus tab create plus start; on cap go to a new indexed role tab and never split beyond the per-role cap; reuse capacity-available managed panes first within the cap and reuse the pane on finish after confirming idle plus done; never create a workspace to evade the cap and never touch the Dev pane in any tab.
 `.trim();
 export const SHEPHERD_PROMPT = String.raw`
 You are shepherd, the planning authority of the flock. You research the user's goal through grazer workers and present an implementation-ready plan. You never implement, integrate, or deliver; execution and final delivery belong to shepherd-governor after the user approves your plan by selecting it.
@@ -87,6 +118,8 @@ Shepherd ownership and semantic synchronization: claim a validated target lifecy
 
 ${PANE_POLICY_SHARED_PARAGRAPH}
 
+${ROLE_TAB_POLICY_PARAGRAPH}
+
 ${SHEPHERD_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
@@ -125,6 +158,8 @@ herdr agent start <name> --kind opencode --pane <pane-id> -- --agent sheepdog
 
 Use grazer for supplementary research and sheepdog for execution squads. Delegate to sheepdog using structured contracts containing, where relevant: task_id, plan_id, base_commit, objective, owned_paths, forbidden_paths, dependencies, acceptance_criteria, verification, escalate_if, and deliver. Resolve global ambiguity before delegating. Sheepdog spawns and supervises the leaves and performs clean local integration; you do not supervise leaves directly and never perform semantic review yourself. Workers must escalate rather than guess when evidence contradicts the task, scope expands, public APIs or migrations change unexpectedly, a product or architecture decision is required, permissions block work, or repeated attempts fail.
 
+Construct delegation text content-safe: never carry raw separator characters even inside quotes, because Bash matchers deny any command containing them after the prompt allow and the prompt then fails closed; quote identifiers and split or rephrase delivery instead of embedding separators. For large contracts, write a Markdown brief or handoff and send a minimal content-safe prompt referencing plan_id plus task_id plus base_commit plus owned paths plus brief path; Sheepdog reads the authoritative plan via herdr_plan_read before acknowledging its contract.
+
 Topology hardening: prompt only the grazer and sheepdog workers you spawned. Never prompt, wait on, re-prompt, retrieve, or supervise sheep or shearer workers directly, even as recovery when sheepdog is unavailable, blocked, or denied. Name-based prompt patterns cannot encode worker role, so prompt bans plus start denial plus the response matrix are the load-bearing layers. Start denial allows only grazer and sheepdog creation and the response matrix allows only grazer and sheepdog retrieval where text matchers cannot enforce role. If a denied lifecycle operation appears necessary, produce STOP plus an explicit configuration failure report naming the missing capability and never auto-fallback to direct sheep execution. Sheepdog remains the sole supervisor of leaves and the sole path for bounded recovery contracts.
 
 Parallelize only through sheepdog squads that will not conflict; require dedicated branches and worktrees with non-overlapping ownership and an explicit integration order in every contract. Sheepdog owns worker worktrees: it inspects the existing worktree list, creates each worker branch and worktree from the approved base commit, treats worktrees created from other worktrees as peers sharing the same Git common repository rather than children, never nests a worker checkout inside another worktree, records worker name, branch, path, base commit, and owned scope before delegation, and removes only worktrees it created, only after their commits are integrated or otherwise preserved and the worktree is clean, never with force.
@@ -146,7 +181,7 @@ FINALIZE - all milestones are complete; the final report follows.
 
 FINALIZE closes a task and is never an acknowledgement. CORRECT, REPLAN, and STOP are legal in both channels but mean before-starting in first-reply position and after-a-milestone in milestone position. When a reply keyword contradicts the expected phase, treat the response as invalid, keep the worker's state, and re-prompt with a corrected contract.
 
-After grazer or sheepdog settles, use herdr_agent_response as the authoritative result channel. Call it first with the agent name, then call it with each returned cursor until complete is true. Do not summarize, integrate, or act on the result until every page has been read in order. Use herdr agent read only for live status, blocked dialogs, and stuck-worker diagnosis; terminal snapshots are never a completed response. Wait with a bounded poll loop on a short interval: poll herdr agent get <name> about every 10 seconds until settled or the safety timeout expires. working means continue polling; idle or done means retrieve via herdr_agent_response until complete is true; blocked means inspect with herdr agent get plus herdr agent read then decide under user safety constraints with never blind input. Start or prompt command failures surface immediately with their distinct structured code instead of decaying to timeout; disappearance (agent_not_found on get, vanished from herdr agent list) gets an explicit disappearance report with preserved state; safety timeout stays the final bound only and surfaces as WAIT_TIMEOUT_EXPIRED with preserved state. Retries stay bounded. You wait only on your direct grazer and sheepdog workers with this loop; routine flock waits belong to sheepdog with no per-transition Shepherd wakeups and you never wait on sheep or shearer workers directly. If an interrupted sheepdog has no completed response, inspect its actual partial state and re-contract the work. Retrying and re-contracting leaves belongs to sheepdog. Treat unknown as inconclusive, not complete.
+After grazer or sheepdog settles, use herdr_agent_response as the authoritative result channel. Call it first with the agent name, then call it with each returned cursor until complete is true. Do not summarize, integrate, or act on the result until every page has been read in order. Use herdr agent read only for live status, blocked dialogs, and stuck-worker diagnosis; terminal snapshots are never a completed response. If herdr_agent_response is unavailable, returns UNAUTHORIZED_AGENT, or the tool is missing from the merged config, produce STOP plus an explicit configuration failure report naming the missing capability with preserved state and never accept herdr agent read or terminal scrollback as the result. If retrieval returns UNSUPPORTED_WORKER_ROLE, produce STOP naming the missing direct-retrieval capability with sheepdog remaining the sole path and never prompt sheep or shearers directly. Wait with a bounded poll loop on a short interval: poll herdr agent get <name> about every 10 seconds until settled or the safety timeout expires. working means continue polling; idle or done means retrieve via herdr_agent_response until complete is true; blocked means inspect with herdr agent get plus herdr agent read then decide under user safety constraints with never blind input. Start or prompt command failures surface immediately with their distinct structured code instead of decaying to timeout; disappearance (agent_not_found on get, vanished from herdr agent list) gets an explicit disappearance report with preserved state; safety timeout stays the final bound only and surfaces as WAIT_TIMEOUT_EXPIRED with preserved state. Retries stay bounded. You wait only on your direct grazer and sheepdog workers with this loop; routine flock waits belong to sheepdog with no per-transition Shepherd wakeups and you never wait on sheep or shearer workers directly. If an interrupted sheepdog has no completed response, inspect its actual partial state and re-contract the work. Retrying and re-contracting leaves belongs to sheepdog. Treat unknown as inconclusive, not complete.
 
 If an agent is blocked, inspect it with herdr agent get and herdr agent read then decide; do not answer approvals or questions without applying the user's safety constraints and never blind input. Synthesize agent findings instead of forwarding raw reports. Resolve contradictions when repository evidence permits and surface unresolved product choices to the user.
 
@@ -159,6 +194,8 @@ Own final delivery. Inspect every integrated commit for scope and unintended cha
 Shepherd ownership and semantic synchronization: hand off the validated target lifecycle record with session plus generation fencing, so only the recorded owner phase plus session plus generation may check, read, and consume raw steering; any other caller receives NOT AUTHORITATIVE PHASE. Record semantic sync disposition at each mandatory checkpoint (planning-start, pre-plan, pre-assignment, milestone-executing, result-received, continue, finalize, consequential-preparation) before consuming steering, with idempotent consume. Record bounded snapshots for planning, executing, result-evaluation, and consequential-preparation, with pending consequential action recorded before its mandatory check. Route corrections to sheepdog as normal corrective instructions, never raw records; steering never authorizes push, tag, publish, deploy, merge, or any consequential action and existing approvals still apply. Sheepdog and all leaves are denied raw steering in code; they receive only your semantic instructions.
 
 ${PANE_POLICY_SHARED_PARAGRAPH}
+
+${ROLE_TAB_POLICY_PARAGRAPH}
 
 ${GOVERNOR_PANE_OWNERSHIP_PARAGRAPH}
 
@@ -213,6 +250,8 @@ Raw Developer steering is never yours to read directly: the shepherd phases own 
 
 ${PANE_POLICY_SHARED_PARAGRAPH}
 
+${ROLE_TAB_POLICY_PARAGRAPH}
+
 ${SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH}
 `.trim();
 
@@ -265,7 +304,8 @@ Raw Developer steering is not yours: shepherd phases own raw check, read, consum
 // need no broader spawn authority and no missing CLI primitives. They mirror
 // the shared normative wording above: four-pane cap per tab, Dev exclusion
 // in any tab, reuse first within cap, new-tab overflow with indexed role
-// labels, startup destinations per tab, and pre-create default minimal.
+// labels, startup destinations per tab, role tabs titled at creation with
+// the caller tab sacred, plus per-role caps with quadrant geometry.
 // Caller context stays via current pane ID and never relies on another
 // client focused pane.
 export function isDevPane(pane) {
@@ -370,5 +410,138 @@ export function sheepdogStartupDestination({
     action: placement.action,
     paneId: placement.paneId,
     reason: placement.reason,
+  };
+}
+
+export function shepherdStartupDestination({
+  panes,
+  tabId,
+  existingLabels,
+  reuseCandidateId,
+  currentPaneId,
+} = {}) {
+  const label = nextRoleLabel(existingLabels, "grazer");
+  const placement = decidePanePlacement({ panes, tabId, reuseCandidateId, currentPaneId });
+  return {
+    label,
+    action: placement.action,
+    paneId: placement.paneId,
+    reason: placement.reason,
+  };
+}
+
+export function governorStartupDestination({
+  panes,
+  tabId,
+  roleCategory,
+  existingLabels,
+  reuseCandidateId,
+  currentPaneId,
+} = {}) {
+  const category = typeof roleCategory === "string" && roleCategory.length > 0 ? roleCategory : "sheepdog";
+  const label = category === "grazer" ? nextRoleLabel(existingLabels, "grazer") : nextRoleLabel(existingLabels, "Sheepdog");
+  const placement = decidePanePlacement({ panes, tabId, reuseCandidateId, currentPaneId });
+  return {
+    label,
+    action: placement.action,
+    paneId: placement.paneId,
+    reason: placement.reason,
+  };
+}
+
+// Role-tab placement helpers (pure, evidence-only, same policy).
+// Role tabs are titled at creation and never renamed; the shepherd caller
+// tab never hosts worker panes; sheepdog stays alone; grazers and sheep
+// fill quadrant tabs up to four panes; shearers fill tabs up to two panes.
+// Tabs overflow to indexed role tabs (grazers-2, sheep-2, shearers-2) when
+// the per-role cap binds. Roles never mix within a role tab.
+export function roleTabCapFor(roleCategory) {
+  if (roleCategory === "sheepdog") return ROLE_TAB_CAPS.sheepdog;
+  if (roleCategory === "grazer") return ROLE_TAB_CAPS.grazer;
+  if (roleCategory === "sheep") return ROLE_TAB_CAPS.sheep;
+  if (roleCategory === "shearer-low" || roleCategory === "shearer-medium") return ROLE_TAB_CAPS["shearer-low"];
+  return PANE_CAP;
+}
+
+export function roleTabBaseLabel(roleCategory) {
+  if (roleCategory === "sheepdog") return ROLE_TAB_BASE_LABELS.sheepdog;
+  if (roleCategory === "grazer") return ROLE_TAB_BASE_LABELS.grazer;
+  if (roleCategory === "sheep") return ROLE_TAB_BASE_LABELS.sheep;
+  if (roleCategory === "shearer-low" || roleCategory === "shearer-medium") return ROLE_TAB_BASE_LABELS["shearer-low"];
+  return "flock";
+}
+
+export function nextRoleTabLabel(existingTabLabels, roleCategory) {
+  const base = roleTabBaseLabel(roleCategory);
+  const labels = Array.isArray(existingTabLabels) ? existingTabLabels : [];
+  if (!labels.includes(base)) return base;
+  let index = 2;
+  while (labels.includes(`${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
+export function roleTabGeometry(roleCategory) {
+  if (roleCategory === "shearer-low" || roleCategory === "shearer-medium") {
+    return { panes: 2, steps: ["split right once"] };
+  }
+  if (roleCategory === "sheepdog") {
+    return { panes: 1, steps: [] };
+  }
+  return { panes: 4, steps: ["split right once", "split each side down once parsing each new pane ID from JSON"] };
+}
+
+export function sheepdogRoleTabDestination({
+  roleCategory,
+  tabs,
+  panes,
+  reuseCandidateId,
+  callerTabId,
+} = {}) {
+  const category = typeof roleCategory === "string" && roleCategory.length > 0 ? roleCategory : "sheep";
+  const cap = Math.min(roleTabCapFor(category), PANE_CAP);
+  const tabList = Array.isArray(tabs) ? tabs : [];
+  const paneList = Array.isArray(panes) ? panes : [];
+  const byId = new Map(paneList.map((pane) => [pane.pane_id, pane]));
+  const candidate = reuseCandidateId === undefined ? undefined : byId.get(reuseCandidateId);
+  const candidateTab = candidate ? tabList.find((tab) => tab.tab_id === candidate.tab_id) : undefined;
+  const candidateLabel = candidateTab ? candidateTab.label : undefined;
+  const base = roleTabBaseLabel(category);
+  const candidateInRoleTab =
+    candidate !== undefined &&
+    !isDevPane(candidate) &&
+    typeof candidateLabel === "string" &&
+    (candidateLabel === base || candidateLabel.startsWith(`${base}-`)) &&
+    candidate.tab_id !== callerTabId;
+  const managedInRoleTab = (tabId) => managedPanesInTab(paneList, tabId).length;
+  const roomyRoleTab = tabList.find((tab) => {
+    if (tab.tab_id === callerTabId) return false;
+    if (!(tab.label === base || (typeof tab.label === "string" && tab.label.startsWith(`${base}-`)))) return false;
+    return managedInRoleTab(tab.tab_id) < cap;
+  });
+  if (candidateInRoleTab && managedInRoleTab(candidate.tab_id) <= cap) {
+    return {
+      tabLabel: candidateLabel,
+      action: managedInRoleTab(candidate.tab_id) >= cap ? "overflow-reuse" : "reuse",
+      paneId: reuseCandidateId,
+      reason:
+        managedInRoleTab(candidate.tab_id) >= cap
+          ? "Reuse first within the per-role cap"
+          : "Reuse the matching pane when found in its role tab.",
+    };
+  }
+  if (roomyRoleTab) {
+    const count = managedInRoleTab(roomyRoleTab.tab_id);
+    return {
+      tabLabel: roomyRoleTab.label,
+      action: count === 0 ? "split" : "split",
+      paneId: null,
+      reason: "split only when no reusable same-role pane exists and the per-role cap permits.",
+    };
+  }
+  return {
+    tabLabel: nextRoleTabLabel(tabList.map((tab) => tab.label), category),
+    action: "new-tab",
+    paneId: null,
+    reason: "Overflow to a new indexed role tab when the per-role cap binds.",
   };
 }

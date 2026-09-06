@@ -326,8 +326,16 @@ const GOVERNOR_SEND_KEYS_CTRL_C_ALLOWS = {
 // pane IDs are opaque and labels are absent from scan plus split plus close
 // command strings, while a `*Dev*` glob would overmatch legitimate
 // `--cwd C:\Dev\...` values, so no such glob is added; the prompt plus docs
-// architecture tab section exclusion stays primary with per-tab cap plus
-// new-tab overflow plus never touch Dev in any tab; see docs residual.
+ // architecture tab section exclusion stays primary with per-tab cap plus
+ // new-tab overflow plus never touch Dev in any tab; see docs residual.
+ // Role-tab layout: dedicated tabs titled at creation via tab create label
+ // (`Sheepdog - <descriptor>`, `grazers`, `sheep`, `shearers` plus indexed
+ // overflow `grazers-2` etc.), never renamed (tab rename stays denied);
+ // shepherd caller tab never hosts worker panes; sheepdog stays alone;
+ // grazers plus sheep up to four panes in quadrant geometry (split right
+ // once then each side down once, parsing each ID from JSON); shearers up
+ // to two panes side by side; per-role overflow to new indexed role tabs;
+ // roles never mix within a role tab.
 const SHEPHERD_PANE_ALLOWS = {
   "herdr tab list*": "allow",
   "herdr tab create*": "allow",
@@ -337,6 +345,7 @@ const SHEPHERD_PANE_ALLOWS = {
 };
 const GOVERNOR_PANE_ALLOWS = {
   "herdr tab list*": "allow",
+  "herdr tab create*": "allow",
   "herdr pane get*": "allow",
   "herdr pane rename*": "allow",
   "herdr agent rename*": "allow",

@@ -317,3 +317,37 @@ test("21-M2 governor legitimate grazer plus sheepdog spawn plus retrieval plus p
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /herdr_plan_read/);
   assert.match(SHEPHERD_GOVERNOR_PROMPT, /Sheepdog owns worker worktrees/);
 });
+
+test("31-M1 governor delegation is content-safe by construction with file-based large contracts", () => {
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /content-safe/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /even inside quotes/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /fails closed/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /split or rephrase/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /Markdown brief or handoff/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /herdr_plan_read before acknowledging/);
+  const bash = createAgents()["shepherd-governor"].permission.bash;
+  assert.equal(
+    m2EvaluateBash(bash, "herdr agent prompt squad_1 bounded task without separators --wait --timeout 1000"),
+    "allow",
+    "clean governor prompt stays allow",
+  );
+  for (const cmd of [
+    'herdr agent prompt squad_1 "fix; do X" --wait --timeout 1000',
+    'herdr agent prompt squad_1 "a && b" --wait --timeout 1000',
+    'herdr agent prompt squad_1 "a || b" --wait --timeout 1000',
+    'herdr agent prompt squad_1 "a | b" --wait --timeout 1000',
+    'herdr agent prompt squad_1 "a > b" --wait --timeout 1000',
+    'herdr agent prompt squad_1 "a < b" --wait --timeout 1000',
+  ]) {
+    assert.equal(m2EvaluateBash(bash, cmd), "deny", `separator task text must fail closed: ${cmd}`);
+  }
+});
+
+test("32-M1 governor retrieval fails closed without accepting terminal read", () => {
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /terminal snapshots are never a completed response/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /herdr_agent_response until complete/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /returns UNAUTHORIZED_AGENT/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never accept herdr agent read or terminal scrollback as the result/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /UNSUPPORTED_WORKER_ROLE/);
+  assert.match(SHEPHERD_GOVERNOR_PROMPT, /never prompt sheep or shearers directly/);
+});
