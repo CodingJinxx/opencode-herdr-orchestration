@@ -1,15 +1,15 @@
 {
-  "name": "opencode-herdr-orchestration",
-  "version": "0.3.4",
+  "name": "@ia-forge/flocky",
+  "version": "1.0.0",
   "description": "Capability-separated Herdr orchestration agents for OpenCode",
   "author": "CodingJinxx",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CodingJinxx/opencode-herdr-orchestration.git"
+    "url": "git+https://github.com/CodingJinxx/flocky.git"
   },
-  "homepage": "https://github.com/CodingJinxx/opencode-herdr-orchestration#readme",
+  "homepage": "https://github.com/CodingJinxx/flocky#readme",
   "bugs": {
-    "url": "https://github.com/CodingJinxx/opencode-herdr-orchestration/issues"
+    "url": "https://github.com/CodingJinxx/flocky/issues"
   },
   "type": "module",
   "exports": {
@@ -17,7 +17,7 @@
     "./core": "./src/index.js"
   },
   "bin": {
-    "opencode-herdr-orchestration": "bin/orchestration.js"
+    "flocky": "bin/orchestration.js"
   },
   "files": [
     "bin",
@@ -34,6 +34,7 @@
     "node": ">=20"
   },
   "keywords": [
+    "flocky",
     "opencode",
     "herdr",
     "orchestration",

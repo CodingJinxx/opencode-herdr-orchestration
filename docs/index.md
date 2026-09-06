@@ -1,9 +1,9 @@
 ---
-title: opencode-herdr-orchestration
+title: flocky
 layout: default
 ---
 
-# opencode-herdr-orchestration
+# flocky
 
 Capability-separated Herdr orchestration agents for OpenCode, organized as **Developer → Shepherd → Flock** for planning, implementation, independent review, and delivery.
 

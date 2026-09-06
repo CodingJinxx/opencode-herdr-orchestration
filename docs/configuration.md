@@ -11,12 +11,12 @@ Live versions at verification time were package `0.3.2`, OpenCode `1.18.29`, Her
 
 ## Global plugin entry
 
-The global OpenCode file is `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc` unless `OPENCODE_CONFIG_DIR` points elsewhere. The published package entry is the bare name:
+The global OpenCode file is `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc` unless `OPENCODE_CONFIG_DIR` points elsewhere. The published package entry is the scoped name:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-herdr-orchestration"]
+  "plugin": ["@ia-forge/flocky"]
 }
 ```
 
@@ -27,7 +27,7 @@ Current OpenCode releases may record but not execute an npm plugin referenced on
 ```jsonc
 {
   "plugin": [
-    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js"
+    "file:///ABSOLUTE/PATH/TO/.config/opencode/node_modules/@ia-forge/flocky/src/plugin.js"
   ]
 }
 ```
@@ -40,12 +40,12 @@ During local development, reference a local checkout directly with a stable file
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "file:///C:/Dev/opencode-herdr-orchestration/src/plugin.js"
+    "file:///C:/Dev/flocky/src/plugin.js"
   ]
 }
 ```
 
-Replace the example checkout path with the real absolute path to the local source file. This development entry is for a local checkout only; machines that track the published package keep the bare name or the installed file path above.
+Replace the example checkout path with the real absolute path to the local source file. This development entry is for a local checkout only; machines that track the published package keep the scoped name or the installed file path above.
 
 ## Model defaults in a plugin tuple
 
@@ -55,7 +55,7 @@ Model choices live as options in a plugin tuple beside the plugin name. The tupl
 {
   "plugin": [
     [
-      "opencode-herdr-orchestration",
+      "@ia-forge/flocky",
       {
         "shepherdModel": "anthropic/claude-sonnet-4-6",
         "sheepdogModel": "litellm/glm-5.3-flash",
@@ -87,7 +87,7 @@ Machine-specific planning permissions and instructions use two scoped options th
 {
   "plugin": [
     [
-      "opencode-herdr-orchestration",
+      "@ia-forge/flocky",
       {
         "shepherdPermissions": {
           "private_deployment_status": "allow"
@@ -109,7 +109,7 @@ Squad-local machine permissions and instructions use the same scoped pattern and
 {
   "plugin": [
     [
-      "opencode-herdr-orchestration",
+      "@ia-forge/flocky",
       {
         "sheepdogPermissions": {
           "private_squad_status": "allow"

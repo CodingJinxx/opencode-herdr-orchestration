@@ -13,7 +13,16 @@ import {
   steerCommandEntry as steerEntry,
 } from "./steer.js";
 
-export const PACKAGE_NAME = "opencode-herdr-orchestration";
+// Migrator (flocky-exec-01): PACKAGE_NAME is the scoped successor per core;
+// LEGACY_PACKAGE_NAME stays recognized until the next major release only.
+// Fresh installs write the scoped file-URL entry; updates collapse any legacy
+// bare plus versioned plus file-path entry to the scoped entry while preserving
+// tuples plus comments plus backups. Install migrates the config entry, best-
+// effort uninstalls the legacy npm package, and migrates the agent manifest
+// only when digests verify. Uninstall removes both entries. Hooks-path
+// mismatches warn and never auto-force (bin install-hooks --force is manual).
+export const PACKAGE_NAME = "@ia-forge/flocky";
+export const LEGACY_PACKAGE_NAME = "opencode-herdr-orchestration";
 const NPM_COMMAND = "npm";
 const OPENCODE_COMMAND = "opencode";
 export const AGENT_NAMES = [
@@ -51,16 +60,37 @@ export function configDirectory(env = process.env) {
   return join(home, ".config", "opencode");
 }
 
-export function packageEntry(configDir) {
-  return pathToFileURL(join(configDir, "node_modules", PACKAGE_NAME, "src", "plugin.js")).href;
+export function packageEntry(configDir, packageName = PACKAGE_NAME) {
+  return pathToFileURL(join(configDir, "node_modules", packageName, "src", "plugin.js")).href;
 }
 
+export function legacyPackageEntry(configDir) {
+  return packageEntry(configDir, LEGACY_PACKAGE_NAME);
+}
+
+function specMatchesPackage(spec, name) {
+  if (typeof spec !== "string") return false;
+  if (spec === name || spec.startsWith(`${name}@`)) return true;
+  const normalized = spec.replace(/\\/g, "/");
+  return normalized.includes(`/node_modules/${name}/`);
+}
+
+// Dual match: old bare plus versioned plus file path plus new scoped bare plus
+// versioned plus file path. Legacy support stays until the next major release;
+// new installs always write PACKAGE_NAME. Remove legacy in next major only.
 export function isOrchestrationPlugin(entry) {
   const spec = Array.isArray(entry) ? entry[0] : entry;
-  return (
-    typeof spec === "string" &&
-    (spec === PACKAGE_NAME || spec.startsWith(`${PACKAGE_NAME}@`) || spec.includes(`/node_modules/${PACKAGE_NAME}/`))
-  );
+  return specMatchesPackage(spec, PACKAGE_NAME) || specMatchesPackage(spec, LEGACY_PACKAGE_NAME);
+}
+
+export function isLegacyOrchestrationPlugin(entry) {
+  const spec = Array.isArray(entry) ? entry[0] : entry;
+  return specMatchesPackage(spec, LEGACY_PACKAGE_NAME);
+}
+
+export function isCurrentOrchestrationPlugin(entry) {
+  const spec = Array.isArray(entry) ? entry[0] : entry;
+  return specMatchesPackage(spec, PACKAGE_NAME);
 }
 
 export function updatePluginConfig(text, entry, remove = false) {
@@ -82,7 +112,12 @@ export function updatePluginConfig(text, entry, remove = false) {
   }
   if (matches.length && (remove || matches.length > 1)) {
     const remaining = plugins.filter((candidate) => !isOrchestrationPlugin(candidate));
-    if (!remove) remaining.push(Array.isArray(existing) ? [entry, existing[1] ?? {}] : entry);
+    if (!remove) {
+      const tupleSource = plugins.filter((candidate) => isOrchestrationPlugin(candidate)).find((candidate) => Array.isArray(candidate));
+      if (Array.isArray(tupleSource)) remaining.push([entry, tupleSource[1] ?? {}]);
+      else if (Array.isArray(existing)) remaining.push([entry, existing[1] ?? {}]);
+      else remaining.push(entry);
+    }
     return applyEdits(source, modify(source, ["plugin"], remaining, { formattingOptions }));
   }
   if (!remove) {
@@ -95,9 +130,9 @@ export function updatePluginConfig(text, entry, remove = false) {
 
 export function orchestrationOptions(text) {
   const config = parse(text || "{}", [], { allowTrailingComma: true, disallowComments: false });
-  const entry = Array.isArray(config?.plugin)
-    ? config.plugin.find((candidate) => isOrchestrationPlugin(candidate))
-    : undefined;
+  const plugins = Array.isArray(config?.plugin) ? config.plugin : [];
+  const entry = plugins.find((candidate) => isCurrentOrchestrationPlugin(candidate))
+    ?? plugins.find((candidate) => isOrchestrationPlugin(candidate));
   return Array.isArray(entry) && entry[1] && typeof entry[1] === "object" ? entry[1] : {};
 }
 
@@ -352,10 +387,26 @@ function run(command, args, options = {}) {
   return result.stdout.trim();
 }
 
+export function legacyInstalledVersion(configDir) {
+  const manifest = join(configDir, "node_modules", LEGACY_PACKAGE_NAME, "package.json");
+  if (!existsSync(manifest)) return null;
+  try {
+    return JSON.parse(readFileSync(manifest, "utf8")).version;
+  } catch {
+    return null;
+  }
+}
+
 export function installedVersion(configDir) {
   const manifest = join(configDir, "node_modules", PACKAGE_NAME, "package.json");
-  if (!existsSync(manifest)) return null;
-  return JSON.parse(readFileSync(manifest, "utf8")).version;
+  if (existsSync(manifest)) {
+    try {
+      return JSON.parse(readFileSync(manifest, "utf8")).version;
+    } catch {
+      return null;
+    }
+  }
+  return legacyInstalledVersion(configDir);
 }
 
 export function packageVersion(packageRoot) {
@@ -372,6 +423,13 @@ export function installPackage(configDir, version) {
     .map((name) => backupFile(join(configDir, name)))
     .filter(Boolean);
   run(NPM_COMMAND, ["install", "--save-exact", `${PACKAGE_NAME}@${version}`], { cwd: configDir });
+  // Migrate: best-effort removal of the legacy bare package so old and scoped
+  // installs never linger side by side. Never fails the install; warn only.
+  try {
+    if (existsSync(join(configDir, "node_modules", LEGACY_PACKAGE_NAME))) {
+      run(NPM_COMMAND, ["uninstall", LEGACY_PACKAGE_NAME], { cwd: configDir });
+    }
+  } catch {}
   return backups;
 }
 
@@ -381,6 +439,9 @@ export function uninstallPackage(configDir) {
     .filter(Boolean);
   try {
     run(NPM_COMMAND, ["uninstall", PACKAGE_NAME], { cwd: configDir });
+  } catch {}
+  try {
+    run(NPM_COMMAND, ["uninstall", LEGACY_PACKAGE_NAME], { cwd: configDir });
   } catch {}
   return backups;
 }
@@ -495,7 +556,11 @@ export function readAgentFilesManifest(configDir) {
   } catch (error) {
     return { manifest: null, error: String(error?.message ?? error) };
   }
-  if (parsed?.schema !== AGENT_MANIFEST_SCHEMA || parsed?.package !== PACKAGE_NAME || !Array.isArray(parsed.files)) {
+  if (
+    parsed?.schema !== AGENT_MANIFEST_SCHEMA ||
+    (parsed?.package !== PACKAGE_NAME && parsed?.package !== LEGACY_PACKAGE_NAME) ||
+    !Array.isArray(parsed.files)
+  ) {
     return { manifest: null, error: `unsupported manifest at ${file}` };
   }
   return { manifest: parsed, error: null };
@@ -618,11 +683,14 @@ export function validateOpenCode(configDir) {
 export function status(configDir, packageRoot) {
   const file = findConfigFile(configDir);
   let configured = false;
+  let legacyPluginDetected = false;
   let steerCommandConfigured = false;
   if (existsSync(file)) {
     const text = readFileSync(file, "utf8");
     const config = parse(text, [], { allowTrailingComma: true, disallowComments: false });
-    configured = Array.isArray(config?.plugin) && config.plugin.some(isOrchestrationPlugin);
+    const plugins = Array.isArray(config?.plugin) ? config.plugin : [];
+    configured = plugins.some(isOrchestrationPlugin);
+    legacyPluginDetected = plugins.some(isLegacyOrchestrationPlugin);
     try {
       steerCommandConfigured = isSteerCommandConfigured(text);
     } catch {
@@ -659,6 +727,7 @@ export function status(configDir, packageRoot) {
     updateAvailable: Boolean(installed && latest && installed !== latest),
     configFile: file,
     pluginConfigured: configured,
+    legacyPluginDetected,
     steerCommandConfigured,
     detectedAgents,
     agentsReady: detectedAgents.length === AGENT_NAMES.length,

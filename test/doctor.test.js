@@ -302,7 +302,7 @@ test("doctor bin dispatch keeps status shape untouched with doctor plus usage pl
   assert.match(pkg.scripts.check, /node --check src\/doctor\.js/);
   assert.match(pkg.scripts.check, /node --check bin\/orchestration\.js/);
 
-  // Existing status keys stay intact via the installer export.
+  // Existing status keys stay intact via the installer export plus migrator legacy flag.
   const probeDir = mkdtempSync(join(tmpdir(), "doctor-status-"));
   const result = installationStatus(probeDir, resolve("."));
   assert.deepEqual(Object.keys(result).sort(), [
@@ -313,12 +313,15 @@ test("doctor bin dispatch keeps status shape untouched with doctor plus usage pl
     "installedVersion",
     "latestVersion",
     "latestVersionError",
+    "legacyPluginDetected",
     "obsoleteAgentFiles",
     "package",
     "pluginConfigured",
     "steerCommandConfigured",
     "updateAvailable",
   ]);
+  assert.equal(result.package, "@ia-forge/flocky");
+  assert.equal(result.legacyPluginDetected, false);
 
   const unknown = spawnSync(process.execPath, [cli, "does-not-exist"], { encoding: "utf8", windowsHide: true });
   assert.equal(unknown.status, 2);

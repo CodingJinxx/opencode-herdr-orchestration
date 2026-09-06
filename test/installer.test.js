@@ -12,13 +12,20 @@ import {
   AGENT_MANIFEST_SCHEMA,
   AGENT_NAMES,
   KNOWN_OBSOLETE_AGENTS,
+  LEGACY_PACKAGE_NAME,
+  PACKAGE_NAME,
   PROJECT_CONFIG_FILE,
   PROJECT_CONFIG_FILENAMES,
   backupFile,
   configDirectory,
   findConfigFile,
   findProjectConfigFile,
+  installedVersion,
+  isCurrentOrchestrationPlugin,
+  isLegacyOrchestrationPlugin,
   isOrchestrationPlugin,
+  legacyInstalledVersion,
+  legacyPackageEntry,
   orchestrationOptions,
   packageEntry,
   packageVersion,
@@ -27,12 +34,14 @@ import {
   removeAgentFilesManifest,
   resolveProjectConfigFile,
   restoreBackup,
+  status as installationStatus,
   unownedObsoleteAgentFiles,
   updateAgentModels,
   updatePluginConfig,
   updateProjectAgentPermissions,
   validateOpenCode,
   writeAgentFilesManifest,
+  writePluginConfig,
   writeProjectAgentPermissions,
 } from "../src/installer.js";
 import {
@@ -187,7 +196,7 @@ test("preserves JSONC comments, unrelated plugins, and tuple options", () => {
   ],
 }
 `;
-  const entry = "file:///home/user/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///home/user/.config/opencode/node_modules/@ia-forge/flocky/src/plugin.js";
   const updated = updatePluginConfig(source, entry);
   assert.match(updated, /Keep this comment/);
   assert.match(updated, /Keep this plugin comment/);
@@ -197,14 +206,19 @@ test("preserves JSONC comments, unrelated plugins, and tuple options", () => {
 });
 
 test("adds, removes, and deduplicates only orchestration registrations", () => {
-  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
+  const legacyEntry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
   const added = updatePluginConfig("{\n  \"plugin\": [\"other\"]\n}\n", entry);
   assert.deepEqual(parse(added).plugin, ["other", entry]);
 
-  const duplicate = JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", [entry, { keep: true }]] });
+  const duplicate = JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", [legacyEntry, { keep: true }]] });
   const deduplicated = updatePluginConfig(duplicate, entry);
-  assert.deepEqual(parse(deduplicated).plugin, ["other", entry]);
+  assert.deepEqual(parse(deduplicated).plugin, ["other", [entry, { keep: true }]]);
   assert.deepEqual(parse(updatePluginConfig(deduplicated, entry, true)).plugin, ["other"]);
+
+  const scopedDuplicate = JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", "@ia-forge/flocky", [entry, { keep: true }]] });
+  assert.deepEqual(parse(updatePluginConfig(scopedDuplicate, entry)).plugin, ["other", [entry, { keep: true }]]);
+  assert.deepEqual(parse(updatePluginConfig(scopedDuplicate, entry, true)).plugin, ["other"]);
 });
 
 test("configures agent models while preserving plugin options and comments", () => {
@@ -216,7 +230,7 @@ test("configures agent models while preserving plugin options and comments", () 
   }]],
 }
 `;
-  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
   const updated = updateAgentModels(source, entry, {
     shepherdModel: "provider/shepherd",
     sheepdogModel: "provider/sheepdog",
@@ -241,7 +255,7 @@ test("configures agent models while preserving plugin options and comments", () 
 });
 
 test("empty model choices restore package defaults", () => {
-  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
   const source = JSON.stringify({
     plugin: [[entry, {
       workerModel: "custom/worker",
@@ -265,7 +279,7 @@ test("empty model choices restore package defaults", () => {
 });
 
 test("promotes a first-time plugin registration to model options", () => {
-  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
   const updated = updateAgentModels("{}", entry, {
     shepherdModel: "provider/shepherd",
     workerModel: "provider/worker",
@@ -285,9 +299,26 @@ test("promotes a first-time plugin registration to model options", () => {
 test("creates portable file URLs and recognizes package registrations", () => {
   const entry = packageEntry(process.platform === "win32" ? "C:\\Users\\Test\\.config\\opencode" : "/home/test/.config/opencode");
   assert.match(entry, /^file:\/\//);
+  assert.match(entry, /@ia-forge\/flocky/);
   assert.equal(isOrchestrationPlugin(entry), true);
   assert.equal(isOrchestrationPlugin(["opencode-herdr-orchestration@1.2.3", {}]), true);
+  assert.equal(isOrchestrationPlugin("opencode-herdr-orchestration"), true);
+  assert.equal(isOrchestrationPlugin("file:///home/user/.config/opencode/node_modules/opencode-herdr-orchestration/src/plugin.js"), true);
+  assert.equal(isOrchestrationPlugin("@ia-forge/flocky"), true);
+  assert.equal(isOrchestrationPlugin("@ia-forge/flocky@1.0.0"), true);
+  assert.equal(isOrchestrationPlugin("file:///home/user/.config/opencode/node_modules/@ia-forge/flocky/src/plugin.js"), true);
   assert.equal(isOrchestrationPlugin("unrelated"), false);
+  assert.equal(PACKAGE_NAME, "@ia-forge/flocky");
+  assert.equal(LEGACY_PACKAGE_NAME, "opencode-herdr-orchestration");
+  const legacyEntry = legacyPackageEntry(process.platform === "win32" ? "C:\\Users\\Test\\.config\\opencode" : "/home/test/.config/opencode");
+  assert.match(legacyEntry, /opencode-herdr-orchestration/);
+  assert.equal(isOrchestrationPlugin(legacyEntry), true);
+  assert.equal(isLegacyOrchestrationPlugin(legacyEntry), true);
+  assert.equal(isLegacyOrchestrationPlugin(entry), false);
+  assert.equal(isLegacyOrchestrationPlugin("opencode-herdr-orchestration"), true);
+  assert.equal(isLegacyOrchestrationPlugin("@ia-forge/flocky"), false);
+  assert.equal(isCurrentOrchestrationPlugin(entry), true);
+  assert.equal(isCurrentOrchestrationPlugin(legacyEntry), false);
 });
 
 test("restores a config backup after failed validation", () => {
@@ -495,9 +526,10 @@ test("install updates the manifest only after validation passes", { skip: proces
   assert.equal(existsSync(join(configRoot, "agent", "sheep-plan.md")), true);
   const manifest = readManifest(configRoot);
   assert.equal(manifest.version, packageVersion(resolve(".")));
+  assert.equal(manifest.package, "@ia-forge/flocky");
   assert.deepEqual(manifest.files, []);
   const config = readFileSync(join(configRoot, "opencode.jsonc"), "utf8");
-  assert.match(config, /opencode-herdr-orchestration/);
+  assert.match(config, /@ia-forge\/flocky/);
 });
 
 test("install keeps the manifest untouched when validation fails", { skip: process.platform !== "win32" }, () => {
@@ -541,6 +573,187 @@ test("uninstall removes manifest-proven files, the manifest, and reports unowned
   assert.equal(existsSync(join(configRoot, "agent", "sheep-build.md")), false);
   assert.equal(existsSync(join(configRoot, "agent", "sheperd-plan.md")), true);
   assert.equal(existsSync(join(configRoot, AGENT_MANIFEST_FILE)), false);
+});
+
+// Migrator flocky-exec-01: old bare plus versioned plus file path plus new
+// scoped bare plus versioned plus file path with collapse plus manifest plus status.
+test("migrator accepts old and scoped bare plus versioned plus file path", () => {
+  const scopedEntry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
+  const legacyEntry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  for (const entry of [
+    "opencode-herdr-orchestration",
+    "opencode-herdr-orchestration@0.3.4",
+    legacyEntry,
+    [legacyEntry, { keep: true }],
+    "@ia-forge/flocky",
+    "@ia-forge/flocky@1.0.0",
+    scopedEntry,
+    [scopedEntry, { keep: true }],
+  ]) {
+    assert.equal(isOrchestrationPlugin(entry), true, `${JSON.stringify(entry)} must match`);
+  }
+  assert.equal(isLegacyOrchestrationPlugin("opencode-herdr-orchestration"), true);
+  assert.equal(isLegacyOrchestrationPlugin("opencode-herdr-orchestration@0.3.4"), true);
+  assert.equal(isLegacyOrchestrationPlugin(legacyEntry), true);
+  assert.equal(isLegacyOrchestrationPlugin("@ia-forge/flocky"), false);
+  assert.equal(isLegacyOrchestrationPlugin(scopedEntry), false);
+  assert.equal(isCurrentOrchestrationPlugin("@ia-forge/flocky"), true);
+  assert.equal(isCurrentOrchestrationPlugin(scopedEntry), true);
+  assert.equal(isCurrentOrchestrationPlugin("opencode-herdr-orchestration"), false);
+  assert.equal(isOrchestrationPlugin("unrelated-plugin"), false);
+});
+
+test("migrator update collapses legacy to scoped preserving tuples plus comments", () => {
+  const scoped = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
+  const legacyFile = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const source = `{
+  // Keep this comment.
+  "plugin": [
+    "other-plugin", // Keep this plugin comment.
+    ["opencode-herdr-orchestration@0.1.0", { "private": true }],
+  ],
+}
+`;
+  const migrated = updatePluginConfig(source, scoped);
+  assert.match(migrated, /Keep this comment/);
+  assert.match(migrated, /Keep this plugin comment/);
+  assert.deepEqual(parse(migrated).plugin, ["other-plugin", [scoped, { private: true }]]);
+
+  const both = JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", "@ia-forge/flocky@1.0.0", [legacyFile, { keep: true }]] });
+  assert.deepEqual(parse(updatePluginConfig(both, scoped)).plugin, ["other", [scoped, { keep: true }]]);
+
+  const bothScopedTuple = JSON.stringify({ plugin: [[legacyFile, { keep: true }], [scoped, { extra: 1 }]] });
+  const collapsed = parse(updatePluginConfig(bothScopedTuple, scoped)).plugin;
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0][0], scoped);
+
+  const removed = parse(updatePluginConfig(both, scoped, true)).plugin;
+  assert.deepEqual(removed, ["other"]);
+});
+
+test("migrator manual legacy tuple migrates through agent models preserving options", () => {
+  const scoped = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
+  const source = JSON.stringify({ plugin: [["opencode-herdr-orchestration", { keep: true, workerModel: "old/worker" }]] });
+  const updated = updateAgentModels(source, scoped, { workerModel: "provider/worker" });
+  const parsed = parse(updated);
+  assert.equal(parsed.plugin.length, 1);
+  assert.equal(parsed.plugin[0][0], scoped);
+  assert.equal(parsed.plugin[0][1].keep, true);
+  assert.equal(parsed.plugin[0][1].workerModel, "provider/worker");
+  assert.equal(orchestrationOptions(updated).keep, true);
+});
+
+test("migrator fresh plus update from old plus manual plus uninstall via writePluginConfig", () => {
+  const writeConfig = writePluginConfig;
+  // Fresh: no prior file gains the scoped entry.
+  const freshDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-fresh-"));
+  const fresh = writeConfig(freshDir, false);
+  assert.equal(fresh.changed, true);
+  assert.equal(fresh.existed, false);
+  assert.equal(fresh.backup, null);
+  const freshText = readFileSync(fresh.file, "utf8");
+  assert.match(freshText, /@ia-forge\/flocky/);
+  assert.equal(parse(freshText).plugin.length, 1);
+  assert.equal(isCurrentOrchestrationPlugin(parse(freshText).plugin[0]), true);
+  assert.equal(isLegacyOrchestrationPlugin(parse(freshText).plugin[0]), false);
+
+  // Update from old: legacy bare migrates to scoped preserving tuple plus comment plus backup.
+  const updateDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-update-"));
+  mkdirSync(updateDir, { recursive: true });
+  const legacyFile = join(updateDir, "opencode.jsonc");
+  writeFileSync(legacyFile, `{\n  // Keep this comment.\n  "plugin": [["opencode-herdr-orchestration", { "private": true }]]\n}\n`, "utf8");
+  const migrated = writeConfig(updateDir, false);
+  assert.equal(migrated.changed, true);
+  assert.ok(migrated.backup && existsSync(migrated.backup));
+  const migratedText = readFileSync(migrated.file, "utf8");
+  assert.match(migratedText, /Keep this comment/);
+  const migratedParsed = parse(migratedText);
+  assert.equal(migratedParsed.plugin.length, 1);
+  assert.match(migratedParsed.plugin[0][0], /@ia-forge\/flocky/);
+  assert.equal(migratedParsed.plugin[0][1].private, true);
+
+  // Manual: legacy file-path entry migrates to scoped file-path entry.
+  const manualDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-manual-"));
+  mkdirSync(manualDir, { recursive: true });
+  writeFileSync(join(manualDir, "opencode.jsonc"), JSON.stringify({ plugin: ["file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js"] }), "utf8");
+  const manual = writeConfig(manualDir, false);
+  const manualParsed = parse(readFileSync(manual.file, "utf8"));
+  assert.equal(manualParsed.plugin.length, 1);
+  assert.match(manualParsed.plugin[0], /@ia-forge\/flocky/);
+
+  // Uninstall removes both legacy and scoped while preserving unrelated.
+  const removeDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-remove-"));
+  mkdirSync(removeDir, { recursive: true });
+  const scopedEntry = packageEntry(removeDir);
+  const legacyEntry = legacyPackageEntry(removeDir);
+  writeFileSync(join(removeDir, "opencode.jsonc"), JSON.stringify({ plugin: ["other", "opencode-herdr-orchestration", scopedEntry, [legacyEntry, { keep: true }]] }), "utf8");
+  const removed = writeConfig(removeDir, true);
+  assert.deepEqual(parse(readFileSync(removed.file, "utf8")).plugin, ["other"]);
+});
+
+test("migrator status reports legacyPluginDetected for old entries only", () => {
+  const installStatus = installationStatus;
+  const packageRoot = resolve(".");
+  const emptyDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-empty-"));
+  mkdirSync(emptyDir, { recursive: true });
+  assert.equal(installStatus(emptyDir, packageRoot).legacyPluginDetected, false);
+  assert.equal(installStatus(emptyDir, packageRoot).pluginConfigured, false);
+
+  const legacyDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-legacy-"));
+  mkdirSync(legacyDir, { recursive: true });
+  writeFileSync(join(legacyDir, "opencode.jsonc"), JSON.stringify({ plugin: ["opencode-herdr-orchestration"] }), "utf8");
+  const legacyStatus = installStatus(legacyDir, packageRoot);
+  assert.equal(legacyStatus.pluginConfigured, true);
+  assert.equal(legacyStatus.legacyPluginDetected, true);
+  assert.equal(legacyStatus.package, "@ia-forge/flocky");
+
+  const scopedDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-scoped-"));
+  mkdirSync(scopedDir, { recursive: true });
+  writeFileSync(join(scopedDir, "opencode.jsonc"), JSON.stringify({ plugin: [packageEntry(scopedDir)] }), "utf8");
+  const scopedStatus = installStatus(scopedDir, packageRoot);
+  assert.equal(scopedStatus.pluginConfigured, true);
+  assert.equal(scopedStatus.legacyPluginDetected, false);
+
+  const bothDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-both-"));
+  mkdirSync(bothDir, { recursive: true });
+  writeFileSync(join(bothDir, "opencode.jsonc"), JSON.stringify({ plugin: ["opencode-herdr-orchestration", packageEntry(bothDir)] }), "utf8");
+  const bothStatus = installStatus(bothDir, packageRoot);
+  assert.equal(bothStatus.pluginConfigured, true);
+  assert.equal(bothStatus.legacyPluginDetected, true);
+});
+
+test("migrator manifest accepts legacy package and migrates to scoped on write", () => {
+  const configRoot = mkdtempSync(join(tmpdir(), "orchestration-migrator-manifest-"));
+  const content = seedObsoleteFile(configRoot, "shepherd-plan");
+  writeManifest(configRoot, [{ path: "agent/shepherd-plan.md", digest: digestOf(content), version: "0.1.5" }]);
+  const { manifest, error } = readAgentFilesManifest(configRoot);
+  assert.equal(error, null);
+  assert.equal(manifest.package, "opencode-herdr-orchestration");
+  const report = reconcileAgentFiles(configRoot, { remove: false });
+  assert.deepEqual(report.deleted, ["agent/shepherd-plan.md"]);
+  const written = writeAgentFilesManifest(configRoot, report.manifestEntries, "1.0.0");
+  assert.equal(written.changed, true);
+  const migrated = readAgentFilesManifest(configRoot).manifest;
+  assert.equal(migrated.package, "@ia-forge/flocky");
+  assert.equal(migrated.version, "1.0.0");
+});
+
+test("migrator installedVersion prefers scoped and falls back to legacy", () => {
+  const scopedDir = mkdtempSync(join(tmpdir(), "orchestration-migrator-installed-"));
+  mkdirSync(join(scopedDir, "node_modules", "@ia-forge", "flocky"), { recursive: true });
+  writeFileSync(join(scopedDir, "node_modules", "@ia-forge", "flocky", "package.json"), JSON.stringify({ version: "1.0.0" }), "utf8");
+  mkdirSync(join(scopedDir, "node_modules", "opencode-herdr-orchestration"), { recursive: true });
+  writeFileSync(join(scopedDir, "node_modules", "opencode-herdr-orchestration", "package.json"), JSON.stringify({ version: "0.3.4" }), "utf8");
+  assert.equal(installedVersion(scopedDir), "1.0.0");
+  assert.equal(legacyInstalledVersion(scopedDir), "0.3.4");
+
+  const legacyOnly = mkdtempSync(join(tmpdir(), "orchestration-migrator-legacy-only-"));
+  mkdirSync(join(legacyOnly, "node_modules", "opencode-herdr-orchestration"), { recursive: true });
+  writeFileSync(join(legacyOnly, "node_modules", "opencode-herdr-orchestration", "package.json"), JSON.stringify({ version: "0.3.4" }), "utf8");
+  assert.equal(installedVersion(legacyOnly), "0.3.4");
+
+  const empty = mkdtempSync(join(tmpdir(), "orchestration-migrator-none-"));
+  assert.equal(installedVersion(empty), null);
 });
 
 // 15-M1 project config helpers plus Governor skill section.

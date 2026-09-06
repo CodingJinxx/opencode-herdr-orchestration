@@ -220,7 +220,7 @@ test("15-M2 E2E all seven roles apply through the skill with preserved tuples", 
     assert.equal(parsed.agent[role].permission.bash["echo e2e-seven-*"], "allow", `${role} must gain the probe rule`);
   }
   // Tuple shape is preserved through the text edits.
-  const entry = "file:///tmp/node_modules/opencode-herdr-orchestration/src/plugin.js";
+  const entry = "file:///tmp/node_modules/@ia-forge/flocky/src/plugin.js";
   const withTuple = updateProjectAgentPermissions(
     JSON.stringify({ plugin: [[entry, { keep: true }]] }),
     "sheep",
