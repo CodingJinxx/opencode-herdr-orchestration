@@ -88,9 +88,9 @@ test("19-M1 Troubleshooting links lineage with resolving anchors", () => {
   const refs = [...section.matchAll(/src\/installer\.js:(\d+)/g)];
   assert.ok(refs.length >= 3, "docs carry resolving file refs");
   const expectedTokens = {
-    "src/installer.js:40": "configDirectory",
-    "src/installer.js:529": "OPENCODE_DISABLE_PROJECT_CONFIG",
-    "src/installer.js:552": "status",
+    "src/installer.js:48": "configDirectory",
+    "src/installer.js:594": "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "src/installer.js:617": "status",
   };
   for (const [file, token] of Object.entries(expectedTokens)) {
     assert.ok(section.includes(file), `${file} referenced`);

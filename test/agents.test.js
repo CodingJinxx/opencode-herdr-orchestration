@@ -37,6 +37,7 @@ const OLD_ROLES = [
 ];
 
 const NEW_ROLES = [
+  "developer",
   "grazer",
   "shearer-low",
   "shearer-medium",
@@ -464,13 +465,15 @@ test("keeps steering submission parity between static permissions and runtime al
   for (const [name, allowed] of STEERING_TOOL_ACCESS) {
     assert.ok(tools[name], `plugin registers ${name}`);
     for (const agent of allowed) {
-      assert.ok(!agents[agent], `Developer is not a registered orchestration agent: ${agent}`);
+      assert.ok(agents[agent], `Developer profile is registered: ${agent}`);
+      assert.equal(agents[agent].permission[name], "allow", `${agent} holds only ${name}`);
     }
     for (const role of ORCHESTRATION_ROLES) {
       assert.equal(agents[role].permission[name], "deny", `${role} is denied ${name} statically`);
       assert.ok(!allowed.has(role), `${role} is absent from the runtime allowlist`);
     }
   }
+  assert.equal(agents.developer.permission[STEERING_TOOLS.submit], "allow", "developer holds the submit tool");
 });
 
 test("maps Developer to an explicit non-flock mode distinct from none", () => {

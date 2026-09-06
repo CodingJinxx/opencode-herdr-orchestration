@@ -22,6 +22,7 @@ import {
   validateOpenCode,
   writeAgentFilesManifest,
   writePluginConfig,
+  writeSteerCommand,
 } from "../src/installer.js";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -127,12 +128,14 @@ async function installOrUpdate(useLatest) {
     restoreBackup(result.file, result.backup, result.existed);
     throw new Error(`OpenCode validation failed; restored the previous config. ${error.message}`);
   }
+  const steerResult = writeSteerCommand(configDir, false);
   const reconciliation = reconcileAgentFiles(configDir, { remove: false });
   writeAgentFilesManifest(configDir, reconciliation.manifestEntries, version);
   if (flags.includes("--with-hooks")) installHooks();
   process.stdout.write(`Configured ${PACKAGE_NAME}@${version} in ${result.file}\n`);
   reportReconciliation(reconciliation);
   if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
+  if (steerResult.backup && steerResult.backup !== result.backup) process.stdout.write(`Backup: ${steerResult.backup}\n`);
   for (const backup of packageBackups) process.stdout.write(`Backup: ${backup}\n`);
   process.stdout.write("Restart OpenCode intentionally to load the new configuration.\n");
 }
@@ -157,6 +160,7 @@ async function configureAgents() {
 
 function uninstallOrchestration() {
   const configDir = configDirectory();
+  const steerResult = writeSteerCommand(configDir, true);
   const result = writePluginConfig(configDir, true);
   const packageBackups = uninstallPackage(configDir);
   const reconciliation = reconcileAgentFiles(configDir, { remove: true });
@@ -167,7 +171,8 @@ function uninstallOrchestration() {
     process.stdout.write(`Removed package-owned agent file: ${relPath}\n`);
   }
   reportReconciliation(reconciliation);
-  if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
+  if (steerResult.backup) process.stdout.write(`Backup: ${steerResult.backup}\n`);
+  if (result.backup && result.backup !== steerResult.backup) process.stdout.write(`Backup: ${result.backup}\n`);
   for (const backup of packageBackups) process.stdout.write(`Backup: ${backup}\n`);
 }
 

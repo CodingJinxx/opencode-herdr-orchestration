@@ -16,6 +16,7 @@ import {
 } from "./agents.js";
 import { createResponseTool } from "./response.js";
 import { createStateService } from "./state.js";
+import { createSteerCommandHook } from "./steer.js";
 
 const SESSION_MODES = new Map();
 
@@ -344,39 +345,56 @@ export function createOwnershipTools(stateOptions = {}) {
   return tools;
 }
 
-export const HerdrOrchestrationPlugin = async (_input, options = {}) => ({
-  tool: {
-    herdr_agent_response: createResponseTool(options.response),
-    ...createStateTools(options.state),
-    ...createSteeringTools(options.state),
-    ...createRawSteeringTools(options.state),
-    ...createOwnershipTools(options.state),
-  },
-  config(config) {
-    config.agent ??= {};
-    const agents = createAgents(options);
-    for (const [name, defaults] of Object.entries(agents)) {
-      config.agent[name] = mergeAgent(defaults, config.agent[name]);
-    }
-  },
+export const HerdrOrchestrationPlugin = async (pluginInput = {}, options = {}) => {
+  const stateOptions = { ...(options.state ?? {}) };
+  if (stateOptions.cwd === undefined) {
+    const fallback = pluginInput?.directory ?? pluginInput?.worktree;
+    if (typeof fallback === "string" && fallback.length > 0) stateOptions.cwd = fallback;
+  }
+  const resolveAgent = options.steerResolveAgent ?? options.steer?.resolveAgent;
+  const steerBefore = createSteerCommandHook({
+    client: pluginInput?.client,
+    stateOptions,
+    ...(resolveAgent ? { resolveAgent } : {}),
+  });
+  return {
+    tool: {
+      herdr_agent_response: createResponseTool(options.response),
+      ...createStateTools(options.state),
+      ...createSteeringTools(options.state),
+      ...createRawSteeringTools(options.state),
+      ...createOwnershipTools(options.state),
+    },
+    config(config) {
+      config.agent ??= {};
+      const agents = createAgents(options);
+      for (const [name, defaults] of Object.entries(agents)) {
+        config.agent[name] = mergeAgent(defaults, config.agent[name]);
+      }
+    },
 
-  async "chat.message"(input) {
-    if (input.sessionID) SESSION_MODES.set(input.sessionID, modeForAgent(input.agent));
-  },
+    async "command.execute.before"(input, output) {
+      return steerBefore(input, output);
+    },
 
-  async "shell.env"(input, output) {
-    output.env.SHEPHERD_MODE = input.sessionID
-      ? (SESSION_MODES.get(input.sessionID) ?? "none")
-      : "none";
-  },
+    async "chat.message"(input) {
+      if (input.sessionID) SESSION_MODES.set(input.sessionID, modeForAgent(input.agent));
+    },
 
-  async event({ event }) {
-    if (event?.type === "session.deleted") {
-      const sessionID = event.properties?.info?.id ?? event.properties?.sessionID;
-      if (sessionID) SESSION_MODES.delete(sessionID);
-    }
-  },
-});
+    async "shell.env"(input, output) {
+      output.env.SHEPHERD_MODE = input.sessionID
+        ? (SESSION_MODES.get(input.sessionID) ?? "none")
+        : "none";
+    },
+
+    async event({ event }) {
+      if (event?.type === "session.deleted") {
+        const sessionID = event.properties?.info?.id ?? event.properties?.sessionID;
+        if (sessionID) SESSION_MODES.delete(sessionID);
+      }
+    },
+  };
+};
 
 export default HerdrOrchestrationPlugin;
 export {

@@ -105,11 +105,15 @@ function stateToolPermissions(allowedTools) {
 // Developer steering submission (M2, Option A, trusted Developer only).
 // The explicit non-flock `developer` context is the sole submitter; all
 // seven orchestration roles are denied as defense in depth. The runtime
-// context-agent check in src/index.js stays authoritative over these static
-// entries: even a user override flipping one to "allow" must not bypass the
-// allowlist. No flock role may present as Developer: developer is not a
-// registered orchestration agent and no spawn matrix entry creates it.
+// context-agent check in src/index.js plus the /steer hook in src/steer.js
+// stays authoritative over these static entries: even a user override
+// flipping one to "allow" must not bypass the allowlist. No flock role may
+// present as Developer: the developer profile below holds only the submit
+// tool and no spawn matrix entry creates or targets it.
 export const DEVELOPER_AGENT = "developer";
+export const DEVELOPER_PROMPT = String.raw`
+You are developer, the trusted steering submitter. Submit bounded steering via /steer as <content> or <planId> :: <content>; omit planId only when exactly one active steering target exists. You hold only herdr_steering_submit; you never implement flock work, never spawn workers, and never read raw steering.
+`.trim();
 export const ORCHESTRATION_ROLES = Object.freeze([
   "shepherd",
   "shepherd-governor",
@@ -629,6 +633,23 @@ export function createAgents(options = {}) {
 
     "shearer-low": reviewerAgent(reviewerModel, "low"),
     "shearer-medium": reviewerAgent(reviewerModel, "medium"),
+
+    developer: {
+      mode: "primary",
+      description: "Trusted Developer steering submitter; submits bounded steering via /steer; never implements flock work.",
+      prompt: DEVELOPER_PROMPT,
+      permission: {
+        ...stateToolPermissions([]),
+        ...steeringToolPermissions([STEERING_TOOLS.submit]),
+        ...rawSteeringToolPermissions([]),
+        ...ownershipToolPermissions([]),
+        herdr_agent_response: "deny",
+        task: "deny",
+        edit: "deny",
+        apply_patch: "deny",
+        bash: { "*": "deny", ...separatorDenials },
+      },
+    },
   };
 }
 
