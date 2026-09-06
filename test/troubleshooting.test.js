@@ -1,139 +1,92 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
-function readmeText() {
-  return readFileSync(resolve("README.md"), "utf8");
-}
+import {
+  HEALTHY_HERDR_VERSION,
+  HEALTHY_INTEGRATION_STATUS,
+  HEALTHY_OPENCODE_VERSION,
+  MISSING_INTEGRATION_STATUS,
+  STABLE_CHANNEL,
+  WIN32_SPAWN_ERROR,
+  buildDoctorReport,
+  checkIntegrationPresence,
+  classifyLauncher,
+  detectFlapping,
+  evaluateSpawnProbe,
+  formatHumanSummary,
+  orderCandidates,
+} from "../src/doctor.js";
 
-function troubleshootingSection() {
-  const readme = readmeText();
-  const start = readme.indexOf("## Troubleshooting");
-  assert.ok(start >= 0, "README must contain ## Troubleshooting");
-  const end = readme.indexOf("## Recovery", start);
-  assert.ok(end > start, "Troubleshooting must end before ## Recovery");
-  return readme.slice(start, end);
-}
+const HOSTILE_QUARTET = [
+  "C:\\npm-prefix\\opencode.cmd",
+  "C:\\Users\\op\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+  "C:\\npm-prefix\\opencode.ps1",
+  "C:\\npm-prefix\\opencode",
+];
 
-test("19-M1 Troubleshooting section sits after Upgrade before Recovery", () => {
-  const readme = readmeText();
-  assert.match(readme, /## Troubleshooting/);
-  const upgrade = readme.indexOf("## Upgrade");
-  const troubleshooting = readme.indexOf("## Troubleshooting");
-  const recovery = readme.indexOf("## Recovery");
-  assert.ok(upgrade >= 0, "Upgrade section must exist");
-  assert.ok(troubleshooting > upgrade, "Troubleshooting must sit after Upgrade");
-  assert.ok(recovery > troubleshooting, "Troubleshooting must sit before Recovery");
+const HOSTILE_VERSIONS = [
+  { source: HOSTILE_QUARTET[0], version: "1.19.0", error: null },
+  { source: HOSTILE_QUARTET[1], version: "1.18.29", error: null },
+  { source: HOSTILE_QUARTET[2], version: "1.18.29", error: null },
+  { source: HOSTILE_QUARTET[3], version: null, error: WIN32_SPAWN_ERROR },
+];
+
+test("19-M1 missing integration case distinguishes healthy versus missing via source", () => {
+  const healthy = checkIntegrationPresence({ integrationStatusText: HEALTHY_INTEGRATION_STATUS });
+  assert.equal(healthy.present, true);
+  const missing = checkIntegrationPresence({ integrationStatusText: MISSING_INTEGRATION_STATUS });
+  assert.equal(missing.present, false);
+  assert.equal(missing.missing, true);
 });
 
-test("19-M1 both cases carry Symptom plus Cause plus Check plus Fix plus Verify", () => {
-  const section = troubleshootingSection();
-  assert.match(section, /Missing Herdr OpenCode integration/);
-  assert.match(section, /Windows exe versus shim launcher resolution/);
-  const first = section.indexOf("Missing Herdr OpenCode integration");
-  const second = section.indexOf("Windows exe versus shim launcher resolution");
-  assert.ok(first >= 0 && second > first, "cases must appear in order");
-  const firstCase = section.slice(first, second);
-  const secondCase = section.slice(second);
-  for (const label of ["Symptom:", "Cause:", "Check:", "Fix:", "Verify:"]) {
-    assert.ok(firstCase.includes(label), `integration case must contain ${label}`);
-    assert.ok(secondCase.includes(label), `launcher case must contain ${label}`);
+test("19-M1 launcher resolution case exposes shim-first flap with bumped version via source", () => {
+  assert.equal(classifyLauncher(HOSTILE_QUARTET[0]).kind, "shim-cmd");
+  assert.equal(classifyLauncher(HOSTILE_QUARTET[1]).kind, "direct-exe");
+  assert.equal(classifyLauncher(HOSTILE_QUARTET[2]).kind, "shim-ps1");
+  assert.equal(classifyLauncher(HOSTILE_QUARTET[3]).kind, "extensionless-shim");
+  const ordered = orderCandidates(HOSTILE_QUARTET);
+  const flapping = detectFlapping({ candidates: ordered, versions: HOSTILE_VERSIONS, npmViewVersion: HEALTHY_OPENCODE_VERSION });
+  assert.equal(flapping.reappearingShim, true);
+  assert.equal(flapping.bumpedVersion, true);
+  assert.equal(flapping.flapping, true);
+  const probe = evaluateSpawnProbe({ source: HOSTILE_QUARTET[3], stdout: "", stderr: WIN32_SPAWN_ERROR, status: 1 });
+  assert.equal(probe.ok, false);
+  assert.equal(probe.error, WIN32_SPAWN_ERROR);
+});
+
+test("19-M1 live versions pinned via source constants", () => {
+  assert.equal(HEALTHY_HERDR_VERSION, "0.8.2");
+  assert.equal(HEALTHY_OPENCODE_VERSION, "1.18.29");
+  assert.equal(HEALTHY_INTEGRATION_STATUS, "opencode: current (v10)");
+  assert.equal(MISSING_INTEGRATION_STATUS, "opencode: not installed");
+  assert.equal(STABLE_CHANNEL, "stable");
+  assert.equal(WIN32_SPAWN_ERROR, "%1 is not a valid Win32 application");
+});
+
+test("19-M1 operator remedies carry durable plus session-local split via report", () => {
+  const ordered = orderCandidates(HOSTILE_QUARTET);
+  const report = buildDoctorReport({
+    candidates: HOSTILE_QUARTET,
+    versions: HOSTILE_VERSIONS,
+    spawnProbe: evaluateSpawnProbe({ source: HOSTILE_QUARTET[3], stdout: "", stderr: WIN32_SPAWN_ERROR, status: 1 }),
+    integration: checkIntegrationPresence({ integrationStatusText: MISSING_INTEGRATION_STATUS }),
+    flapping: detectFlapping({ candidates: ordered, versions: HOSTILE_VERSIONS, npmViewVersion: HEALTHY_OPENCODE_VERSION }),
+    pathEntries: ["C:\\npm-prefix"],
+  });
+  const summary = formatHumanSummary(report);
+  for (const fragment of [
+    "operator-chosen",
+    "persistent user-chosen",
+    "restart Herdr",
+    "Session-local changes alone never fix Herdr spawns",
+    "panes inherit the Herdr server environment",
+    "never overwrites the global environment",
+    "never sets global environment values",
+    "reappearing shim",
+    "bumped",
+  ]) {
+    assert.ok(summary.includes(fragment), `report summary must contain ${fragment}`);
   }
-});
-
-test("19-M1 Troubleshooting pins live versions verbatim", () => {
-  const readme = readmeText();
-  assert.match(readme, /herdr 0\.8\.2/);
-  assert.match(readme, /1\.18\.29/);
-  assert.match(readme, /opencode: current \(v10\)/);
-  assert.match(readme, /stable/);
-  assert.match(readme, /0\.2\.1/);
-  const section = troubleshootingSection();
-  assert.match(section, /herdr 0\.8\.2/);
-  assert.match(section, /1\.18\.29/);
-  assert.match(section, /opencode: current \(v10\)/);
-  assert.match(section, /opencode: not installed/);
-  assert.match(section, /%1 is not a valid Win32 application/);
-  assert.match(section, /Start-Process/);
-  assert.match(section, /-ArgumentList --version -NoNewWindow -Wait/);
-  assert.match(section, /\(Get-Command herdr\)\.Source/);
-  assert.match(section, /\(Get-Command opencode\)\.Source/);
-  assert.match(section, /\(Get-Command opencode -All\)\.Source/);
-  assert.match(section, /\(Get-Command herdr -All\)\.Source/);
-  assert.match(section, /\$env:PATH/);
-  assert.match(section, /opencode agent list/);
-  assert.match(section, /opencode debug agent shepherd/);
-  assert.match(section, /node bin\/orchestration\.js status/);
-  assert.match(section, /npm view opencode-herdr-orchestration version/);
-  assert.match(section, /npm view opencode-ai version/);
-  assert.match(section, /herdr channel show/);
-  assert.match(section, /herdr update --help/);
-  assert.match(section, /herdr status/);
-  assert.match(section, /status: running/);
-  assert.match(section, /opencode upgrade --help/);
-  assert.match(section, /herdr integration status/);
-  assert.match(section, /herdr integration install --help/);
-});
-
-test("19-M1 Troubleshooting links lineage with resolving anchors", () => {
-  const readme = readmeText();
-  const section = troubleshootingSection();
-  assert.match(section, /\[Installation\]\(#installation\)/);
-  assert.match(section, /\[Upgrade\]\(#upgrade\)/);
-  assert.match(section, /\[Recovery\]\(#recovery\)/);
-  for (const header of ["## Installation", "## Upgrade", "## Recovery"]) {
-    assert.ok(readme.includes(header), `${header} anchor must resolve`);
-  }
-  const refs = [...section.matchAll(/src\/installer\.js:(\d+)/g)];
-  assert.ok(refs.length >= 3, "docs carry resolving file refs");
-  const expectedTokens = {
-    "src/installer.js:48": "configDirectory",
-    "src/installer.js:594": "OPENCODE_DISABLE_PROJECT_CONFIG",
-    "src/installer.js:617": "status",
-  };
-  for (const [file, token] of Object.entries(expectedTokens)) {
-    assert.ok(section.includes(file), `${file} referenced`);
-    const lineNumber = Number(file.split(":")[1]);
-    const lines = readFileSync(resolve(file.split(":")[0]), "utf8").split("\n");
-    assert.ok(lineNumber >= 1 && lineNumber <= lines.length, `${file} resolves`);
-    const window = lines.slice(Math.max(0, lineNumber - 2), lineNumber + 1).join("\n");
-    assert.match(window, new RegExp(token), `${file} points at ${token}`);
-  }
-});
-
-test("19-M1 Troubleshooting links without duplicating full procedures", () => {
-  const section = troubleshootingSection();
-  assert.doesNotMatch(section, /npx -y opencode-herdr-orchestration@latest install/);
-  assert.doesNotMatch(section, /npx -y opencode-herdr-orchestration@latest update/);
-  assert.match(section, /instead of duplicating them here/);
-  assert.match(section, /instead of inventing new install spellings/);
-  assert.match(section, /instead of launcher reordering/);
-});
-
-test("19-M1 Troubleshooting carries no package automatic global writes with durable plus session-local split", () => {
-  const section = troubleshootingSection();
-  assert.doesNotMatch(section, /setx/i);
-  assert.doesNotMatch(section, /SetEnvironmentVariable/);
-  assert.doesNotMatch(section, /\$env:PATH\s*=/);
-  assert.doesNotMatch(section, /export PATH/);
-  assert.match(section, /never overwrites the global environment/);
-  assert.match(section, /never sets global environment values/);
-  assert.match(section, /never reorders global state automatically/);
-  assert.match(section, /operator-chosen/);
-  assert.match(section, /not a package write/);
-  assert.match(section, /session-local/i);
-  assert.match(section, /persistent user-chosen/);
-  assert.match(section, /restart Herdr/);
-  assert.match(section, /Session-local changes alone never fix Herdr spawns/);
-  assert.match(section, /panes inherit the Herdr server environment/);
-});
-
-test("19-M1 Troubleshooting documents shim flapping from global opencode updates", () => {
-  const section = troubleshootingSection();
-  assert.match(section, /recreates the npm shims/);
-  assert.match(section, /reappearing shim/);
-  assert.match(section, /bumped/);
-  assert.match(section, /npm view opencode-ai version/);
-  assert.match(section, /opencode upgrade/);
+  assert.ok(Array.isArray(report.remedies) && report.remedies.length >= 2);
+  assert.ok(Array.isArray(report.operatorRemedies) && report.operatorRemedies.length >= 2);
 });
