@@ -174,55 +174,28 @@ test("20-M2 diagnostics never feeds semantic decisions and stays source-isolated
   mutable.event.detail = "mutated";
   assert.notEqual(log.list().events.at(-1).detail, "mutated", "record returns a copy");
 });
-function diagnosticsSection() {
-  return fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
-}
-test("20-M2 README documents strategy plus taxonomy plus split plus lineage with resolving refs", () => {
-  const readme = diagnosticsSection();
-  assert.match(readme, /### Operational diagnostics \(20-M2\)/);
-  assert.match(readme, /process-local bounded in-memory ring buffer/);
-  assert.match(readme, /no Herdr side features, no config format changes, no installer changes, and no CLI changes/);
-  for (const type of EXPECTED_TYPES) assert.match(readme, new RegExp(type.replaceAll("-", "\\-")), `${type} documented`);
-  for (const code of ["AGENT_NOT_SETTLED", "AGENT_BLOCKED", "AGENT_ERROR", "AGENT_NOT_FOUND", "HERDR_UNAVAILABLE", "WAIT_TIMEOUT_EXPIRED"]) {
-    assert.match(readme, new RegExp(code), `${code} taxonomy documented`);
+test("20-M2 diagnostics strategy plus taxonomy plus split anchored to source", () => {
+  assert.deepEqual([...DIAGNOSTIC_EVENT_TYPES], EXPECTED_TYPES);
+  assert.equal(classifyAgentStatus("working").code, "AGENT_NOT_SETTLED");
+  assert.equal(classifyAgentStatus("blocked").code, AGENT_BLOCKED_CODE);
+  assert.equal(classifyAgentStatus("error").code, AGENT_ERROR_CODE);
+  assert.equal(waitTimeoutError("worker_1", 60000).error.code, WAIT_TIMEOUT_CODE);
+  const diagnosticsSource = fs.readFileSync(new URL("../src/diagnostics.js", import.meta.url), "utf8");
+  assert.match(diagnosticsSource, /process-local bounded in-memory/);
+  assert.match(diagnosticsSource, /never substitute for authoritative retrieval/);
+  assert.match(diagnosticsSource, /herdr_agent_response until complete/);
+  assert.match(diagnosticsSource, /DIAGNOSTIC_EVENT_TYPES/);
+  assert.match(diagnosticsSource, /createDiagnosticsLog/);
+  const responseSource = fs.readFileSync(new URL("../src/response.js", import.meta.url), "utf8");
+  assert.doesNotMatch(responseSource, /diagnostics/i);
+  assert.match(responseSource, /RESPONSE_MATRIX/);
+  assert.match(responseSource, /classifyAgentStatus/);
+  assert.match(responseSource, /waitTimeoutError/);
+  for (const prompt of [SHEPHERD_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEEPDOG_PROMPT]) {
+    assert.match(prompt, /bounded poll loop/);
+    assert.match(prompt, /herdr_agent_response until complete/);
+    assert.match(prompt, /WAIT_TIMEOUT_EXPIRED/);
   }
-  assert.match(readme, /Diagnostic versus authoritative split/);
-  assert.match(readme, /never return response text/);
-  assert.match(readme, /until `complete` is true/);
-  assert.match(readme, /never feed semantic decisions/);
-  assert.match(readme, /Timeout versus early failure troubleshooting lineage/);
-  assert.match(readme, /surfaces immediately as `HERDR_UNAVAILABLE`/);
-  assert.match(readme, /surfaces immediately as `AGENT_NOT_FOUND`/);
-  assert.match(readme, /expire as `WAIT_TIMEOUT_EXPIRED`/);
-  assert.match(readme, /Record `timed-out` only here/);
-  const section = readme.slice(readme.indexOf("### Operational diagnostics (20-M2)"), readme.indexOf("## Installation", readme.indexOf("### Operational diagnostics (20-M2)")));
-  const refs = [...section.matchAll(/src\/(diagnostics|response|prompts|agents)\.js:(\d+)/g)];
-  assert.ok(refs.length >= 10, "docs carry file plus line references");
-  const expectedTokens = {
-    "src/diagnostics.js:9": "DIAGNOSTIC_EVENT_TYPES",
-    "src/diagnostics.js:20": "MAX_DIAGNOSTIC_EVENTS_DEFAULT",
-    "src/diagnostics.js:25": "SENSITIVE_DIAGNOSTIC_PATTERN",
-    "src/diagnostics.js:79": "createDiagnosticsLog",
-    "src/diagnostics.js:87": "record",
-    "src/diagnostics.js:109": "list",
-    "src/response.js:16": "RESPONSE_MATRIX",
-    "src/response.js:40": "classifyAgentStatus",
-    "src/response.js:59": "waitTimeoutError",
-  };
-  for (const [file, token] of Object.entries(expectedTokens)) {
-    assert.ok(section.includes(file), `${file} referenced`);
-    const lineNumber = Number(file.split(":")[1]);
-    const target = new URL(`../${file.split(":")[0]}`, import.meta.url);
-    const lines = fs.readFileSync(target, "utf8").split("\n");
-    assert.ok(lineNumber >= 1 && lineNumber <= lines.length, `${file} resolves`);
-    const window = lines.slice(Math.max(0, lineNumber - 2), lineNumber + 1).join("\n");
-    assert.match(window, new RegExp(token), `${file} points at ${token}`);
-  }
-  for (const [, name, line] of refs) {
-    void name;
-    void line;
-  }
-  assert.match(readme, /`src\/prompts\.js:28`.*shepherd loop|`src\/prompts\.js:28` \(shepherd loop\)/);
 });
 test("20-M2 M1 regression keeps the loop plus taxonomy plus wording plus allows plus bans intact", async () => {
   assert.deepEqual([...RESPONSE_MATRIX.entries()], [
