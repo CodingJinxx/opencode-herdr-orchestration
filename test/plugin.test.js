@@ -19,6 +19,14 @@ import {
   STEERING_TOOLS,
 } from "../src/agents.js";
 import * as packageEntry from "../src/plugin.js";
+import {
+  DEV_PANE_LABELS,
+  GOVERNOR_PANE_OWNERSHIP_PARAGRAPH,
+  PANE_CAP,
+  PANE_POLICY_SHARED_PARAGRAPH,
+  SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH,
+  SHEPHERD_PANE_OWNERSHIP_PARAGRAPH,
+} from "../src/prompts.js";
 
 function realpath(value) {
   return (fs.realpathSync.native ?? fs.realpathSync)(value);
@@ -725,20 +733,22 @@ test("14-18-M1 pane layout survives plugin config with leaves unchanged", async 
   const hooks = await plugin({}, {});
   const config = {};
   hooks.config(config);
-  for (const name of ["shepherd", "shepherd-governor"]) {
-    const bash = config.agent[name].permission.bash;
-    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
-      assert.equal(bash[key], "allow", `plugin ${name} keeps ${key} for single Sheepdog pane`);
-    }
-    assert.equal(bash["herdr pane close*"], undefined, `plugin ${name} keeps no close`);
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+    assert.equal(config.agent.shepherd.permission.bash[key], "allow", `plugin shepherd keeps ${key} for per-tab overflow`);
   }
+  assert.equal(config.agent.shepherd.permission.bash["herdr pane close*"], undefined, "plugin shepherd keeps no close");
+  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+    assert.equal(config.agent["shepherd-governor"].permission.bash[key], "allow", `plugin shepherd-governor keeps ${key} for single Sheepdog pane`);
+  }
+  assert.equal(config.agent["shepherd-governor"].permission.bash["herdr tab create*"], undefined, "plugin governor keeps no tab create");
+  assert.equal(config.agent["shepherd-governor"].permission.bash["herdr pane close*"], undefined, "plugin governor keeps no close");
   const sheepdogBash = config.agent.sheepdog.permission.bash;
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
-    assert.equal(sheepdogBash[key], "allow", `plugin sheepdog keeps ${key} for flock panes`);
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    assert.equal(sheepdogBash[key], "allow", `plugin sheepdog keeps ${key} for flock panes per tab`);
   }
   for (const name of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
     const bash = config.agent[name].permission.bash;
-    for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+    for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
       assert.equal(bash[key], undefined, `plugin ${name} gains no pane layout allow for ${key}`);
     }
   }
@@ -754,7 +764,7 @@ test("14-18-M1 pane layout scoped tuples stay scoped with lifecycle retained", a
   hooks.config(config);
   assert.equal(config.agent.sheepdog.permission.private_squad_status, "allow");
   assert.match(config.agent.sheepdog.prompt, /Use private squad tools according to local policy\.$/);
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
     assert.equal(config.agent.sheepdog.permission.bash[key], "allow", `sheepdog tuple preserves ${key}`);
   }
   assert.equal(config.agent.sheepdog.permission.bash["herdr pane split*"], "allow", "sheepdog tuple preserves split");
@@ -768,30 +778,33 @@ test("14-18-M1 pane layout scoped tuples stay scoped with lifecycle retained", a
   const shepherdConfig = {};
   shepherdScoped.config(shepherdConfig);
   assert.equal("private_deployment_status" in shepherdConfig.agent.sheepdog.permission, false, "shepherd tuple must not leak to sheepdog");
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*"]) {
     assert.equal(shepherdConfig.agent.shepherd.permission.bash[key], "allow", `shepherd tuple preserves ${key}`);
   }
-  for (const key of ["herdr tab list*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
+  for (const key of ["herdr tab list*", "herdr tab create*", "herdr pane get*", "herdr pane rename*", "herdr agent rename*", "herdr pane close*"]) {
     assert.equal(shepherdConfig.agent.sheepdog.permission.bash[key], "allow", "shepherd tuple preserves sheepdog flock panes");
   }
 });
 
-test("14-18-M1 pane layout README single normative section with Dev exclusion", async () => {
-  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const sections = [...readme.matchAll(/^## Pane layout policy.*$/gm)].map((m) => m[0]);
-  assert.deepEqual(sections, ["## Pane layout policy (14-18-M1)"], "exactly one normative pane policy section");
+test("14-18-M1 pane layout single normative wording with Dev exclusion from source", async () => {
+  assert.equal(PANE_CAP, 4);
+  assert.deepEqual([...DEV_PANE_LABELS], ["Dev", "Developer Terminal"]);
   for (const required of [
     "at most four panes per tab",
-    "Role grouping",
-    "Indexed overflow",
-    "Reuse before create",
-    "Startup destinations",
-    "Ownership",
-    "Protected Dev Developer Terminal exclusion",
+    "Reuse first within the four-pane cap per tab",
+    "overflow to a new tab instead",
+    "Overflow to a new tab with indexed role labels when the cap binds.",
+    "Reuse the matching pane when found",
     "excluded from every scan plus split plus placement plus rename plus close plus reuse",
-    "Six-step placement",
-    "Pane layout residual",
+    "Never count it toward the four-pane cap",
+    "Never create a workspace to evade the cap",
+    "Never touch the Dev pane in any tab.",
+    "Six-step placement is reuse-first plus evidence-only with new-tab overflow",
   ]) {
-    assert.ok(readme.includes(required), `README pane policy must include ${required}`);
+    assert.ok(PANE_POLICY_SHARED_PARAGRAPH.includes(required), `shared pane paragraph must include ${required}`);
   }
+  assert.ok(SHEPHERD_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd manages its single Sheepdog pane"));
+  assert.ok(GOVERNOR_PANE_OWNERSHIP_PARAGRAPH.includes("shepherd-governor manages its single Sheepdog pane"));
+  assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("sheepdog manages flock panes"));
+  assert.ok(SHEEPDOG_PANE_OWNERSHIP_PARAGRAPH.includes("startup destinations for grazer plus sheep plus shearer-low plus shearer-medium"));
 });

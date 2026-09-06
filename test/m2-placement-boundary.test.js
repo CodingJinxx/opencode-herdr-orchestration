@@ -35,7 +35,7 @@ function devPane({ pane_id, tab_id = "w1K:t1", title = "Dev" } = {}) {
   };
 }
 
-test("14-18-M2 four-pane boundary overflows to indexed reuse and never splits", () => {
+test("14-18-M2 four-pane boundary reuses first and overflows to new tab when cap binds", () => {
   assert.equal(PANE_CAP, 4);
   const full = [
     pane({ pane_id: "w1K:p1", label: "caller" }),
@@ -46,11 +46,12 @@ test("14-18-M2 four-pane boundary overflows to indexed reuse and never splits", 
   const atCap = decidePanePlacement({ panes: full, tabId: "w1K:t1", reuseCandidateId: "w1K:p2" });
   assert.equal(atCap.action, "overflow-reuse");
   assert.equal(atCap.paneId, "w1K:p2");
-  assert.match(atCap.reason, /Never split when the filtered count is already four/);
+  assert.match(atCap.reason, /Reuse first within the four-pane cap per tab/);
 
   const overWithoutCandidate = decidePanePlacement({ panes: full, tabId: "w1K:t1" });
-  assert.equal(overWithoutCandidate.action, "overflow-reuse");
+  assert.equal(overWithoutCandidate.action, "new-tab");
   assert.notEqual(overWithoutCandidate.action, "split");
+  assert.match(overWithoutCandidate.reason, /Overflow to a new tab with indexed role labels when the cap binds/);
 
   const fiveWouldBeClutter = decidePanePlacement({
     panes: [...full, pane({ pane_id: "w1K:p5", label: "sheep-3" })],
@@ -180,10 +181,10 @@ test("14-18-M2 initial plus dynamic plus focused plus empty tab cases keep Dev e
 test("14-18-M2 Sheepdog startup named destinations for grazer plus sheep plus shearer categories within cap", () => {
   assert.match(
     SHEEPDOG_PROMPT,
-    /startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap/,
+    /startup destinations for grazer plus sheep plus shearer-low plus shearer-medium worker categories stay within the four-pane cap per tab/,
   );
   assert.match(SHEEPDOG_PROMPT, /pre-create default minimal/);
-  assert.match(SHEEPDOG_PROMPT, /starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the same tab/);
+  assert.match(SHEEPDOG_PROMPT, /starts in its own Sheepdog pane and starts flock workers in sibling flock panes of the current tab with overflow to a new tab/);
 
   assert.equal(nextRoleLabel([], "sheep"), "sheep-1");
   assert.equal(nextRoleLabel(["sheep-1", "sheep-2"], "sheep"), "sheep-3");
@@ -222,6 +223,19 @@ test("14-18-M2 Sheepdog startup named destinations for grazer plus sheep plus sh
     assert.notEqual(destination.paneId, "w1K:pDev");
   }
 
+  for (const category of ["grazer", "sheep", "shearer-low", "shearer-medium"]) {
+    const overflow = sheepdogStartupDestination({
+      panes: full,
+      tabId: "w1K:t1",
+      roleCategory: category,
+      existingLabels: ["Sheepdog", "sheep-1", "sheep-2", "grazer-1"],
+    });
+    assert.equal(overflow.action, "new-tab");
+    assert.notEqual(overflow.action, "split");
+    assert.ok(overflow.label.startsWith(`${category}-`));
+    assert.match(overflow.reason, /Overflow to a new tab with indexed role labels when the cap binds/);
+  }
+
   const withDevFull = [...full, devPane({ pane_id: "w1K:pDev" })];
   const devExcluded = sheepdogStartupDestination({
     panes: withDevFull,
@@ -236,12 +250,13 @@ test("14-18-M2 Sheepdog startup named destinations for grazer plus sheep plus sh
 
 test("14-18-M2 six-step dynamic placement uses the same policy with no separate rulebook", () => {
   for (const prompt of [SHEPHERD_PROMPT, SHEPHERD_GOVERNOR_PROMPT, SHEEPDOG_PROMPT]) {
-    assert.match(prompt, /Six-step placement is single-tab plus reuse-first plus evidence-only/);
-    assert.match(prompt, /Dynamic placement follows the same single normative pane policy with no separate rulebook/);
+    assert.match(prompt, /Six-step placement is reuse-first plus evidence-only with new-tab overflow/);
+    assert.match(prompt, /Dynamic placement follows the same single normative pane policy with new-tab overflow and no separate rulebook/);
     assert.match(prompt, /On finish, reuse the pane for the next same-role assignment after confirming idle plus done/);
     assert.match(prompt, /Reuse is preferred over clutter/);
+    assert.match(prompt, /Never touch the Dev pane in any tab/);
   }
-  assert.match(SHEEPDOG_PROMPT, /six-step placement is single-tab plus reuse-first plus evidence-only with cap check plus reuse check plus split plus rename plus start/);
-  assert.match(SHEEPDOG_PROMPT, /on cap go to indexed overflow reuse and never split/);
-  assert.match(SHEEPDOG_PROMPT, /reuse capacity-available managed panes first/);
+  assert.match(SHEEPDOG_PROMPT, /six-step placement is reuse-first plus evidence-only with new-tab overflow with cap check plus reuse check plus split plus rename plus tab create plus start/);
+  assert.match(SHEEPDOG_PROMPT, /on cap go to a new tab with indexed role labels and never split a fifth pane/);
+  assert.match(SHEEPDOG_PROMPT, /reuse capacity-available managed panes first within the cap/);
 });
