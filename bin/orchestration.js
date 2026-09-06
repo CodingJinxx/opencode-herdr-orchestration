@@ -24,6 +24,7 @@ import {
   writePluginConfig,
   writeSteerCommand,
 } from "../src/installer.js";
+import { collectDoctorReport } from "../src/doctor.js";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const hooksPath = join(homedir(), ".config", "opencode-herdr-orchestration", "hooks");
@@ -190,6 +191,11 @@ function captureHookStatus() {
   });
 }
 
+function runDoctor() {
+  const report = collectDoctorReport();
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+
 try {
   if (command === "install") await installOrUpdate(false);
   else if (command === "update") await installOrUpdate(true);
@@ -198,8 +204,9 @@ try {
   else if (command === "install-hooks") installHooks();
   else if (command === "uninstall-hooks") uninstallHooks();
   else if (command === "status") fullStatus();
+  else if (command === "doctor") runDoctor();
   else {
-    process.stderr.write("Usage: opencode-herdr-orchestration <install|update|configure-agents|status|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
+    process.stderr.write("Usage: opencode-herdr-orchestration <install|update|configure-agents|status|doctor|uninstall|install-hooks|uninstall-hooks> [--with-hooks] [--force]\n");
     process.exitCode = 2;
   }
 } catch (error) {
